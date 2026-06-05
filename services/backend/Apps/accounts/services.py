@@ -1,0 +1,316 @@
+"""Business logic for the accounts app.
+
+Views stay thin and delegate here. All multi-step / stateful operations
+(registration, code issuance, verification, password reset) live in this layer
+so they can be unit-tested and reused independent of HTTP.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+
+from django.conf import settings
+from django.contrib.auth import authenticate
+from django.db import transaction
+from django.utils import timezone
+from rest_framework_simplejwt.tokens import RefreshToken
+
+from Apps.accounts import emails
+from django.contrib.auth.hashers import make_password
+from Apps.accounts.models import (
+    User,
+    VerificationCode,
+    generate_numeric_code,
+    PendingUser,
+)
+from Apps.accounts.signals import email_verified
+from Apps.accounts.selectors import (
+    get_active_user_by_email,
+    get_user_by_referral_code,
+)
+from Apps.common.models import AuditLog
+
+CODE_TTL = dt.timedelta(minutes=15)
+
+_PURPOSE_LABEL = {
+    VerificationCode.Purpose.EMAIL_VERIFY: "email verification",
+    VerificationCode.Purpose.PHONE_VERIFY: "phone verification",
+    VerificationCode.Purpose.PASSWORD_RESET: "password reset",
+}
+
+
+class AccountError(Exception):
+    """Raised for expected, user-facing account errors (mapped to HTTP 400)."""
+
+
+# ---------------------------------------------------------------------------
+# Tokens
+# ---------------------------------------------------------------------------
+def issue_tokens(user: User, *, remember_me: bool = False) -> dict:
+    """Return an access/refresh token pair, honoring the remember-me window."""
+    refresh = RefreshToken.for_user(user)
+    if remember_me:
+        lifetime = settings.SIMPLE_JWT.get(
+            "REFRESH_TOKEN_REMEMBER_LIFETIME", dt.timedelta(days=30)
+        )
+        refresh.set_exp(lifetime=lifetime)
+    return {"access": str(refresh.access_token), "refresh": str(refresh)}
+
+
+# ---------------------------------------------------------------------------
+# Verification codes
+# ---------------------------------------------------------------------------
+def _issue_code(user: User, purpose: str, destination: str) -> VerificationCode:
+    # Invalidate any outstanding codes for this purpose before issuing a new one.
+    VerificationCode.objects.filter(
+        user=user, purpose=purpose, consumed_at__isnull=True
+    ).update(consumed_at=timezone.now())
+
+    return VerificationCode.objects.create(
+        user=user,
+        purpose=purpose,
+        code=generate_numeric_code(),
+        destination=destination,
+        expires_at=timezone.now() + CODE_TTL,
+    )
+
+
+def _verify_code(user: User, purpose: str, code: str) -> VerificationCode:
+    record = (
+        VerificationCode.objects.filter(
+            user=user, purpose=purpose, consumed_at__isnull=True
+        )
+        .order_by("-created_at")
+        .first()
+    )
+    if record is None or record.code != code or not record.is_valid():
+        raise AccountError("Invalid or expired code.")
+    record.consume()
+    return record
+
+
+# ---------------------------------------------------------------------------
+# Registration
+# ---------------------------------------------------------------------------
+@transaction.atomic
+def register_user(
+    *,
+    full_name: str,
+    email: str,
+    password: str,
+    referral_code: str | None = None,
+) -> PendingUser:
+    if User.objects.filter(email__iexact=email, is_deleted=False).exists():
+        raise AccountError("A user with this email already exists.")
+
+    PendingUser.objects.filter(email__iexact=email).delete()
+
+    code = generate_numeric_code()
+    expires_at = timezone.now() + CODE_TTL
+
+    pending = PendingUser.objects.create(
+        email=email.lower(),
+        password=make_password(password),
+        full_name=full_name,
+        referral_code=referral_code,
+        verification_code=code,
+        expires_at=expires_at,
+    )
+
+    emails.send_email_code(
+        to_email=pending.email,
+        code=pending.verification_code,
+        purpose_label="email verification",
+    )
+
+    return pending
+
+
+# ---------------------------------------------------------------------------
+# Email verification
+# ---------------------------------------------------------------------------
+def start_email_verification(user: User) -> None:
+    code = _issue_code(user, VerificationCode.Purpose.EMAIL_VERIFY, user.email)
+    emails.send_email_code(
+        to_email=user.email,
+        code=code.code,
+        purpose_label=_PURPOSE_LABEL[VerificationCode.Purpose.EMAIL_VERIFY],
+    )
+
+
+def resend_email_verification(*, email: str) -> None:
+    pending = PendingUser.objects.filter(email__iexact=email).first()
+    if pending:
+        pending.verification_code = generate_numeric_code()
+        pending.expires_at = timezone.now() + CODE_TTL
+        pending.save(update_fields=["verification_code", "expires_at", "updated_at"])
+
+        emails.send_email_code(
+            to_email=pending.email,
+            code=pending.verification_code,
+            purpose_label="email verification",
+        )
+
+
+@transaction.atomic
+def verify_email(*, email: str, code: str) -> User:
+    pending = PendingUser.objects.filter(email__iexact=email).first()
+    if pending is None:
+        user = get_active_user_by_email(email)
+        if user and user.is_email_verified:
+            return user
+        raise AccountError("Invalid or expired code.")
+
+    if pending.verification_code != code or pending.is_expired:
+        raise AccountError("Invalid or expired code.")
+
+    referred_by = None
+    if pending.referral_code:
+        referred_by = get_user_by_referral_code(pending.referral_code)
+
+    user = User(
+        email=pending.email,
+        password=pending.password,
+        full_name=pending.full_name,
+        is_email_verified=True,
+        referred_by=referred_by,
+        accepted_terms_at=timezone.now(),
+    )
+    user.save()
+
+    pending.delete()
+
+    AuditLog.objects.create(
+        action=AuditLog.Action.CREATE,
+        actor_type="user",
+        actor_id=str(user.id),
+        target_type="user",
+        target_id=str(user.id),
+        metadata={"event": "register", "referred": bool(referred_by)},
+    )
+
+    email_verified.send(sender=User, user=user)
+    return user
+
+
+# ---------------------------------------------------------------------------
+# Phone verification
+# ---------------------------------------------------------------------------
+def start_phone_verification(user: User, *, phone: str) -> None:
+    if (
+        User.objects.filter(phone=phone, is_deleted=False)
+        .exclude(pk=user.pk)
+        .exists()
+    ):
+        raise AccountError("That phone number is already in use.")
+
+    user.phone = phone
+    user.is_phone_verified = False
+    user.save(update_fields=["phone", "is_phone_verified", "updated_at"])
+
+    code = _issue_code(user, VerificationCode.Purpose.PHONE_VERIFY, phone)
+    emails.send_sms_code(
+        to_phone=phone,
+        code=code.code,
+        purpose_label=_PURPOSE_LABEL[VerificationCode.Purpose.PHONE_VERIFY],
+    )
+
+
+def verify_phone(user: User, *, code: str) -> User:
+    _verify_code(user, VerificationCode.Purpose.PHONE_VERIFY, code)
+    user.is_phone_verified = True
+    user.save(update_fields=["is_phone_verified", "updated_at"])
+    return user
+
+
+# ---------------------------------------------------------------------------
+# Login
+# ---------------------------------------------------------------------------
+def login(*, email: str, password: str, remember_me: bool = False) -> dict:
+    user = authenticate(username=email, password=password)
+    if user is None or not user.is_active or user.is_deleted:
+        raise AccountError("Invalid email or password.")
+    if not user.is_email_verified:
+        raise AccountError("Email address is not verified.")
+
+    AuditLog.objects.create(
+        action=AuditLog.Action.LOGIN,
+        actor_type="user",
+        actor_id=str(user.id),
+        target_type="user",
+        target_id=str(user.id),
+    )
+    return issue_tokens(user, remember_me=remember_me)
+
+
+
+# ---------------------------------------------------------------------------
+# Password management
+# ---------------------------------------------------------------------------
+def request_password_reset(*, email: str) -> None:
+    user = get_active_user_by_email(email)
+    # Do not reveal whether the email exists (enumeration protection).
+    if user is None:
+        return
+    code = _issue_code(user, VerificationCode.Purpose.PASSWORD_RESET, user.email)
+    emails.send_email_code(
+        to_email=user.email,
+        code=code.code,
+        purpose_label=_PURPOSE_LABEL[VerificationCode.Purpose.PASSWORD_RESET],
+    )
+
+
+def reset_password(*, email: str, code: str, new_password: str) -> None:
+    user = get_active_user_by_email(email)
+    if user is None:
+        raise AccountError("Invalid or expired code.")
+    _verify_code(user, VerificationCode.Purpose.PASSWORD_RESET, code)
+    user.set_password(new_password)
+    user.save(update_fields=["password", "updated_at"])
+
+
+def change_password(user: User, *, current_password: str, new_password: str) -> None:
+    if not user.check_password(current_password):
+        raise AccountError("Current password is incorrect.")
+    user.set_password(new_password)
+    user.save(update_fields=["password", "updated_at"])
+
+
+# ---------------------------------------------------------------------------
+# Account deletion
+# ---------------------------------------------------------------------------
+def delete_account(user: User) -> None:
+    """Soft-delete: deactivate and free up the email/phone for reuse."""
+    user.is_active = False
+    user.is_deleted = True
+    user.deleted_at = timezone.now()
+    # Release unique identifiers so the person can sign up again later.
+    user.email = f"deleted+{user.id}@nibblai.invalid"
+    user.phone = None
+    user.save(
+        update_fields=[
+            "is_active",
+            "is_deleted",
+            "deleted_at",
+            "email",
+            "phone",
+            "updated_at",
+        ]
+    )
+    AuditLog.objects.create(
+        action=AuditLog.Action.DELETE,
+        actor_type="user",
+        actor_id=str(user.id),
+        target_type="user",
+        target_id=str(user.id),
+        metadata={"event": "account_deletion"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Social login (scaffold — provider verification wired up during integration)
+# ---------------------------------------------------------------------------
+def social_login(*, provider: str, token: str) -> dict:
+    raise AccountError(
+        f"Social login via {provider} is not yet configured on this environment."
+    )

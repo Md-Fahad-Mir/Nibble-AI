@@ -1,0 +1,61 @@
+from rest_framework import serializers
+
+from Apps.offers.models import Bookmark
+
+
+class OfferSerializer(serializers.Serializer):
+    """A resolved offer for a campaign (computed per requesting user)."""
+
+    campaign_id = serializers.UUIDField()
+    name = serializers.CharField()
+    brand_id = serializers.UUIDField()
+    brand_name = serializers.CharField()
+    product_id = serializers.UUIDField()
+    product_name = serializers.CharField()
+    product_image = serializers.CharField(allow_blank=True)
+    category = serializers.CharField(allow_blank=True)
+    offer_type = serializers.CharField(allow_null=True)
+    reward_amount = serializers.CharField(allow_null=True)
+    restriction = serializers.CharField(allow_blank=True)
+    min_purchase_units = serializers.IntegerField()
+    is_bogo = serializers.BooleanField()
+    in_cooldown = serializers.BooleanField()
+    claimable = serializers.BooleanField()
+    end_at = serializers.DateTimeField(allow_null=True)
+
+    def to_representation(self, campaign):
+        from Apps.offers.services import resolve_offer
+
+        return resolve_offer(campaign, self.context.get("user"))
+
+
+class BookmarkSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source="product.name", read_only=True)
+    brand_name = serializers.CharField(source="brand.name", read_only=True)
+
+    class Meta:
+        model = Bookmark
+        fields = [
+            "id",
+            "kind",
+            "product",
+            "brand",
+            "product_name",
+            "brand_name",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class AddBookmarkSerializer(serializers.Serializer):
+    kind = serializers.ChoiceField(choices=Bookmark.Kind.choices)
+    product = serializers.UUIDField(required=False)
+    brand = serializers.UUIDField(required=False)
+
+    def validate(self, attrs):
+        kind = attrs["kind"]
+        if kind == Bookmark.Kind.PRODUCT and not attrs.get("product"):
+            raise serializers.ValidationError({"product": "This field is required."})
+        if kind == Bookmark.Kind.BRAND and not attrs.get("brand"):
+            raise serializers.ValidationError({"brand": "This field is required."})
+        return attrs

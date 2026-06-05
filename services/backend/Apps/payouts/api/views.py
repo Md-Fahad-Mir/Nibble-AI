@@ -1,0 +1,196 @@
+"""HTTP layer: consumer payout methods/withdrawals + admin processing."""
+
+from drf_spectacular.utils import OpenApiParameter, extend_schema
+from rest_framework import status
+from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from Apps.common.exceptions import DomainError
+from Apps.common.permissions import IsPlatformAdmin
+from Apps.payouts import serializers as s
+from Apps.payouts import services
+from Apps.payouts.selectors import (
+    all_batches,
+    all_withdrawals,
+    get_batch,
+    get_user_withdrawal,
+    get_withdrawal,
+    methods_for_user,
+    withdrawals_for_user,
+)
+
+
+def _run(func, *args, **kwargs):
+    try:
+        return func(*args, **kwargs)
+    except DomainError as exc:
+        raise ValidationError({"detail": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# Consumer: payout methods
+# ---------------------------------------------------------------------------
+@extend_schema(tags=["payout-methods"])
+class PayoutMethodListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: s.PayoutMethodSerializer(many=True)})
+    def get(self, request):
+        return Response(
+            s.PayoutMethodSerializer(methods_for_user(request.user), many=True).data
+        )
+
+    @extend_schema(request=s.AddPayoutMethodSerializer, responses={201: s.PayoutMethodSerializer})
+    def post(self, request):
+        serializer = s.AddPayoutMethodSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        method = _run(services.add_payout_method, user=request.user, **serializer.validated_data)
+        return Response(s.PayoutMethodSerializer(method).data, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(tags=["payout-methods"])
+class PayoutMethodDeleteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={204: None})
+    def delete(self, request, method_id):
+        method = request.user.payout_methods.filter(id=method_id).first()
+        if method is None:
+            raise NotFound("Payout method not found.")
+        _run(services.remove_payout_method, method)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# Consumer: withdrawals
+# ---------------------------------------------------------------------------
+@extend_schema(tags=["withdrawals"])
+class WithdrawalListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: s.WithdrawalSerializer(many=True)})
+    def get(self, request):
+        return Response(
+            s.WithdrawalSerializer(withdrawals_for_user(request.user), many=True).data
+        )
+
+    @extend_schema(request=s.RequestWithdrawalSerializer, responses={201: s.WithdrawalSerializer})
+    def post(self, request):
+        serializer = s.RequestWithdrawalSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        withdrawal = _run(
+            services.request_withdrawal,
+            user=request.user,
+            payout_method_id=serializer.validated_data["payout_method"],
+            amount=serializer.validated_data["amount"],
+        )
+        return Response(
+            s.WithdrawalSerializer(withdrawal).data, status=status.HTTP_201_CREATED
+        )
+
+
+@extend_schema(tags=["withdrawals"])
+class WithdrawalDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: s.WithdrawalSerializer})
+    def get(self, request, withdrawal_id):
+        withdrawal = get_user_withdrawal(request.user, withdrawal_id)
+        if withdrawal is None:
+            raise NotFound("Withdrawal not found.")
+        return Response(s.WithdrawalSerializer(withdrawal).data)
+
+
+# ---------------------------------------------------------------------------
+# Admin: processing
+# ---------------------------------------------------------------------------
+def _admin_withdrawal(withdrawal_id):
+    withdrawal = get_withdrawal(withdrawal_id)
+    if withdrawal is None:
+        raise NotFound("Withdrawal not found.")
+    return withdrawal
+
+
+@extend_schema(tags=["admin-payouts"])
+class AdminWithdrawalListView(APIView):
+    permission_classes = [IsPlatformAdmin]
+
+    @extend_schema(
+        parameters=[OpenApiParameter("status", str, description="Filter by status.")],
+        responses={200: s.WithdrawalSerializer(many=True)},
+    )
+    def get(self, request):
+        return Response(
+            s.WithdrawalSerializer(
+                all_withdrawals(status=request.query_params.get("status", "")), many=True
+            ).data
+        )
+
+
+@extend_schema(tags=["admin-payouts"])
+class AdminWithdrawalActionView(APIView):
+    """approve / reject / flag / mark-paid / note via the `action` kwarg."""
+
+    permission_classes = [IsPlatformAdmin]
+
+    _ACTIONS = {"approve", "reject", "flag", "mark-paid", "note"}
+
+    @extend_schema(request=s.ReasonSerializer, responses={200: s.WithdrawalSerializer})
+    def post(self, request, withdrawal_id, action):
+        if action not in self._ACTIONS:
+            raise NotFound("Unknown action.")
+        withdrawal = _admin_withdrawal(withdrawal_id)
+
+        if action == "approve":
+            withdrawal = _run(services.approve_withdrawal, withdrawal=withdrawal, admin=request.user)
+        elif action == "mark-paid":
+            withdrawal = _run(services.mark_paid, withdrawal=withdrawal, admin=request.user)
+        elif action == "note":
+            note = s.NoteSerializer(data=request.data)
+            note.is_valid(raise_exception=True)
+            withdrawal = _run(services.add_note, withdrawal=withdrawal, note=note.validated_data["note"])
+        else:  # reject / flag take an optional reason
+            reason_ser = s.ReasonSerializer(data=request.data)
+            reason_ser.is_valid(raise_exception=True)
+            reason = reason_ser.validated_data.get("reason", "")
+            fn = services.reject_withdrawal if action == "reject" else services.flag_withdrawal
+            withdrawal = _run(fn, withdrawal=withdrawal, admin=request.user, reason=reason)
+
+        return Response(s.WithdrawalSerializer(withdrawal).data)
+
+
+# ---------------------------------------------------------------------------
+# Admin: batches
+# ---------------------------------------------------------------------------
+@extend_schema(tags=["admin-payouts"])
+class AdminBatchListCreateView(APIView):
+    permission_classes = [IsPlatformAdmin]
+
+    @extend_schema(responses={200: s.PayoutBatchSerializer(many=True)})
+    def get(self, request):
+        return Response(s.PayoutBatchSerializer(all_batches(), many=True).data)
+
+    @extend_schema(request=s.CreateBatchSerializer, responses={201: s.PayoutBatchSerializer})
+    def post(self, request):
+        serializer = s.CreateBatchSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        batch = _run(
+            services.create_batch,
+            admin=request.user,
+            withdrawal_ids=serializer.validated_data.get("withdrawal_ids") or None,
+        )
+        return Response(s.PayoutBatchSerializer(batch).data, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(tags=["admin-payouts"])
+class AdminBatchExportView(APIView):
+    permission_classes = [IsPlatformAdmin]
+
+    @extend_schema(responses={200: None})
+    def get(self, request, batch_id):
+        batch = get_batch(batch_id)
+        if batch is None:
+            raise NotFound("Batch not found.")
+        return Response(services.export_batch(batch))

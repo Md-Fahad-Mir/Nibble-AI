@@ -1,0 +1,202 @@
+"""Payout business logic: methods, withdrawals (status machine), and batches."""
+
+from __future__ import annotations
+
+from django.conf import settings
+from django.db import IntegrityError, transaction
+from django.utils import timezone
+
+from Apps.common.exceptions import DomainError
+from Apps.common.money import ZERO, to_money
+from Apps.payouts.models import PayoutBatch, PayoutMethod, WithdrawalRequest
+from Apps.wallets import services as wallet_services
+from Apps.wallets.models import Hold, LedgerEntry
+
+S = WithdrawalRequest.Status
+
+
+class PayoutError(DomainError):
+    """Expected, user-facing payout errors (mapped to HTTP 400)."""
+
+
+# ---------------------------------------------------------------------------
+# Payout methods
+# ---------------------------------------------------------------------------
+def add_payout_method(*, user, provider, handle, is_default=False) -> PayoutMethod:
+    handle = handle.strip()
+    if not handle:
+        raise PayoutError("A payout account handle is required.")
+    # Global uniqueness: an external account links to only one user.
+    if PayoutMethod.objects.filter(provider=provider, handle__iexact=handle).exists():
+        raise PayoutError("This payout account is already linked to an account.")
+    try:
+        with transaction.atomic():
+            if is_default:
+                user.payout_methods.update(is_default=False)
+            return PayoutMethod.objects.create(
+                user=user, provider=provider, handle=handle, is_default=is_default,
+            )
+    except IntegrityError:
+        raise PayoutError("This payout account is already linked to an account.")
+
+
+def remove_payout_method(method: PayoutMethod) -> None:
+    if method.withdrawals.exclude(
+        status__in=[S.PAID, S.REJECTED]
+    ).exists():
+        raise PayoutError("This method has in-progress withdrawals and can't be removed.")
+    method.delete()
+
+
+# ---------------------------------------------------------------------------
+# Withdrawal request (places a hold on the customer wallet)
+# ---------------------------------------------------------------------------
+@transaction.atomic
+def request_withdrawal(*, user, payout_method_id, amount) -> WithdrawalRequest:
+    amount = to_money(amount)
+    minimum = to_money(settings.PAYOUT_MIN_AMOUNT)
+    if amount < minimum:
+        raise PayoutError(f"Minimum withdrawal is {minimum}.")
+
+    method = PayoutMethod.objects.filter(id=payout_method_id, user=user).first()
+    if method is None:
+        raise PayoutError("Payout method not found.")
+
+    wallet = wallet_services.get_or_create_customer_wallet(user)
+    if wallet.available() < amount:
+        raise PayoutError("Insufficient available balance.")
+
+    withdrawal = WithdrawalRequest.objects.create(
+        user=user, payout_method=method, provider=method.provider,
+        handle=method.handle, amount=amount, status=S.PENDING,
+    )
+    hold = wallet_services.place_hold(
+        wallet=wallet, amount=amount,
+        reference_type="withdrawal", reference_id=withdrawal.id,
+        idempotency_key=f"withdrawal-hold:{withdrawal.id}",
+    )
+    withdrawal.hold = hold
+    withdrawal.save(update_fields=["hold", "updated_at"])
+    return withdrawal
+
+
+# ---------------------------------------------------------------------------
+# Admin status machine
+# ---------------------------------------------------------------------------
+def _require_status(withdrawal: WithdrawalRequest, allowed) -> None:
+    if withdrawal.status not in allowed:
+        raise PayoutError(
+            f"Cannot perform this action on a '{withdrawal.status}' withdrawal."
+        )
+
+
+def _stamp(withdrawal: WithdrawalRequest, admin) -> None:
+    withdrawal.reviewed_by = admin
+    withdrawal.reviewed_at = timezone.now()
+
+
+def approve_withdrawal(*, withdrawal, admin) -> WithdrawalRequest:
+    _require_status(withdrawal, {S.PENDING, S.FLAGGED})
+    withdrawal.status = S.APPROVED
+    _stamp(withdrawal, admin)
+    withdrawal.save(update_fields=["status", "reviewed_by", "reviewed_at", "updated_at"])
+    return withdrawal
+
+
+def flag_withdrawal(*, withdrawal, admin, reason="") -> WithdrawalRequest:
+    _require_status(withdrawal, {S.PENDING, S.APPROVED})
+    withdrawal.status = S.FLAGGED
+    if reason:
+        withdrawal.admin_note = reason
+    _stamp(withdrawal, admin)
+    withdrawal.save(
+        update_fields=["status", "admin_note", "reviewed_by", "reviewed_at", "updated_at"]
+    )
+    return withdrawal
+
+
+@transaction.atomic
+def reject_withdrawal(*, withdrawal, admin, reason="") -> WithdrawalRequest:
+    _require_status(withdrawal, {S.PENDING, S.APPROVED, S.PROCESSING, S.FLAGGED})
+    if withdrawal.hold_id and withdrawal.hold.status == Hold.Status.ACTIVE:
+        wallet_services.release_hold(hold=withdrawal.hold)
+    withdrawal.status = S.REJECTED
+    if reason:
+        withdrawal.admin_note = reason
+    _stamp(withdrawal, admin)
+    withdrawal.save(
+        update_fields=["status", "admin_note", "reviewed_by", "reviewed_at", "updated_at"]
+    )
+    return withdrawal
+
+
+@transaction.atomic
+def mark_paid(*, withdrawal, admin) -> WithdrawalRequest:
+    _require_status(withdrawal, {S.APPROVED, S.PROCESSING})
+    if withdrawal.hold_id is None or withdrawal.hold.status != Hold.Status.ACTIVE:
+        raise PayoutError("The withdrawal's hold is unavailable.")
+    wallet_services.capture_hold(
+        hold=withdrawal.hold,
+        category=LedgerEntry.Category.PAYOUT,
+        description=f"Payout via {withdrawal.provider}",
+        idempotency_key=f"withdrawal-payout:{withdrawal.id}",
+    )
+    withdrawal.status = S.PAID
+    withdrawal.paid_at = timezone.now()
+    _stamp(withdrawal, admin)
+    withdrawal.save(
+        update_fields=["status", "paid_at", "reviewed_by", "reviewed_at", "updated_at"]
+    )
+    return withdrawal
+
+
+def add_note(*, withdrawal, note) -> WithdrawalRequest:
+    withdrawal.admin_note = note
+    withdrawal.save(update_fields=["admin_note", "updated_at"])
+    return withdrawal
+
+
+# ---------------------------------------------------------------------------
+# Batches
+# ---------------------------------------------------------------------------
+@transaction.atomic
+def create_batch(*, admin, withdrawal_ids=None) -> PayoutBatch:
+    qs = WithdrawalRequest.objects.filter(status=S.APPROVED)
+    if withdrawal_ids:
+        qs = qs.filter(id__in=withdrawal_ids)
+    approved = list(qs)
+    if not approved:
+        raise PayoutError("No approved withdrawals to batch.")
+
+    batch = PayoutBatch.objects.create(
+        created_by=admin,
+        total_amount=sum((w.amount for w in approved), ZERO),
+    )
+    for withdrawal in approved:
+        withdrawal.status = S.PROCESSING
+        withdrawal.batch = batch
+        withdrawal.save(update_fields=["status", "batch", "updated_at"])
+    return batch
+
+
+def export_batch(batch: PayoutBatch) -> dict:
+    rows = [
+        {
+            "withdrawal_id": str(w.id),
+            "user_email": w.user.email,
+            "provider": w.provider,
+            "handle": w.handle,
+            "amount": str(w.amount),
+        }
+        for w in batch.withdrawals.select_related("user").all()
+    ]
+    if batch.status == PayoutBatch.Status.CREATED:
+        batch.status = PayoutBatch.Status.EXPORTED
+        batch.exported_at = timezone.now()
+        batch.save(update_fields=["status", "exported_at", "updated_at"])
+    return {
+        "batch_id": str(batch.id),
+        "total_amount": str(batch.total_amount),
+        "count": len(rows),
+        "rows": rows,
+    }

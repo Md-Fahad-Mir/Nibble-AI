@@ -1,0 +1,132 @@
+"""Consumer offer logic: cooldown, best-offer resolution, bookmarks, views."""
+
+from __future__ import annotations
+
+import datetime as dt
+
+from django.utils import timezone
+
+from Apps.brands.models import Brand
+from Apps.campaigns.models import Campaign
+from Apps.offers.models import Bookmark, CooldownRecord, OfferView
+from Apps.products.models import Product
+
+
+class OfferError(Exception):
+    """Expected, user-facing offer errors (mapped to HTTP 400)."""
+
+
+# ---------------------------------------------------------------------------
+# Cooldown
+# ---------------------------------------------------------------------------
+def is_in_cooldown(user, campaign: Campaign) -> bool:
+    if user is None or not user.is_authenticated:
+        return False
+    return CooldownRecord.objects.filter(
+        user=user, campaign=campaign, expires_at__gt=timezone.now()
+    ).exists()
+
+
+def enter_cooldown(user, campaign: Campaign) -> CooldownRecord:
+    """Start a premium-reward cooldown. Called by the redemption flow (M7/M9)."""
+    now = timezone.now()
+    return CooldownRecord.objects.create(
+        user=user,
+        campaign=campaign,
+        started_at=now,
+        expires_at=now + dt.timedelta(days=campaign.cooldown_days),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Offer resolution (best available offer / fallback)
+# ---------------------------------------------------------------------------
+def resolve_offer(campaign: Campaign, user=None) -> dict:
+    """Compute the offer to show a given user for a campaign.
+
+    Premium (highest tier) is shown when the campaign is live, the user isn't
+    in cooldown, and tiers exist. Otherwise the fallback offer is shown if the
+    brand enabled it; else nothing is claimable.
+    """
+    in_cd = is_in_cooldown(user, campaign)
+
+    tiers = list(campaign.tiers.all())  # ordered -reward_amount (waterfall)
+    premium = tiers[0] if tiers else None
+    fallback = getattr(campaign, "fallback_offer", None)
+    fallback_active = bool(fallback and fallback.is_enabled)
+
+    premium_available = campaign.is_live and premium is not None and not in_cd
+
+    if premium_available:
+        offer_type = "premium"
+        amount = premium.reward_amount
+    elif fallback_active:
+        offer_type = "fallback"
+        amount = fallback.reward_amount
+    else:
+        offer_type = None
+        amount = None
+
+    restriction = getattr(campaign, "restriction", None)
+
+    return {
+        "campaign_id": str(campaign.id),
+        "name": campaign.name,
+        "brand_id": str(campaign.brand_id),
+        "brand_name": campaign.brand.name,
+        "product_id": str(campaign.product_id),
+        "product_name": campaign.product.name,
+        "product_image": campaign.product.image_url,
+        "category": campaign.product.category,
+        "offer_type": offer_type,
+        "reward_amount": str(amount) if amount is not None else None,
+        "restriction": restriction.description if restriction else "",
+        "min_purchase_units": campaign.min_purchase_units,
+        "is_bogo": campaign.is_bogo,
+        "in_cooldown": in_cd,
+        "claimable": offer_type is not None,
+        "end_at": campaign.end_at,
+    }
+
+
+def record_view(*, user, campaign: Campaign, source: str) -> OfferView:
+    return OfferView.objects.create(
+        user=user if (user and user.is_authenticated) else None,
+        campaign=campaign,
+        source=source,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bookmarks
+# ---------------------------------------------------------------------------
+def add_bookmark(*, user, kind: str, product_id=None, brand_id=None) -> Bookmark:
+    if kind == Bookmark.Kind.PRODUCT:
+        if not product_id:
+            raise OfferError("product is required to bookmark a product.")
+        product = Product.objects.filter(id=product_id, is_active=True).first()
+        if product is None:
+            raise OfferError("Product not found.")
+        bookmark, _ = Bookmark.objects.get_or_create(
+            user=user, product=product, defaults={"kind": Bookmark.Kind.PRODUCT}
+        )
+        return bookmark
+
+    if kind == Bookmark.Kind.BRAND:
+        if not brand_id:
+            raise OfferError("brand is required to bookmark a brand.")
+        brand = Brand.objects.filter(
+            id=brand_id, status=Brand.Status.ACTIVE
+        ).first()
+        if brand is None:
+            raise OfferError("Brand not found.")
+        bookmark, _ = Bookmark.objects.get_or_create(
+            user=user, brand=brand, defaults={"kind": Bookmark.Kind.BRAND}
+        )
+        return bookmark
+
+    raise OfferError("Invalid bookmark kind.")
+
+
+def remove_bookmark(bookmark: Bookmark) -> None:
+    bookmark.delete()
