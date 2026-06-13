@@ -5,7 +5,7 @@ Django + DRF backend for the NibblAI rebate & review platform — a complete, pr
 **Status:** ✅ Production-Ready, Tested & Verified
 **Tests:** 205 passing (0 failures)
 **Schema:** Valid (0 errors, 0 warnings)
-**Last Updated:** 2026-06-05
+**Last Updated:** 2026-06-13
 
 ---
 
@@ -157,7 +157,7 @@ NibblAI uses 40+ environment variables for configuration, secrets, and integrati
 
 - **[.env.example](.env.example)** — Full inventory of all 40+ environment variables.
 - **[SECRETS_MANAGEMENT.md](SECRETS_MANAGEMENT.md)** — How to manage API keys + credentials in production.
-- **[CREDENTIALS_AUDIT.md](CREDENTIALS_AUDIT.md)** — Rotation checklist & security audit.
+
 
 Key variables for production:
 
@@ -187,7 +187,7 @@ Key variables for production:
 
 3. Create your env file:
    ```bash
-   cp .env.example .env
+   cp .env.example 
    ```
 
 4. Migrate and run:
@@ -206,7 +206,7 @@ uv sync
 
 # Setup database
 docker compose up -d db
-cp .env.example .env
+cp .env.example
 
 # Run migrations
 python manage.py migrate
@@ -597,7 +597,6 @@ This repository ships as a complete handover package for QA, Frontend, Mobile, B
 | **[API_TESTING_GUIDE.md](API_TESTING_GUIDE.md)** | Complete 8-phase testing guide (1200+ lines, 69 KB) | QA, Testers, Developers |
 | **[DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md)** | Pre-prod, production, and post-deployment checklists | DevOps, Backend Leads |
 | **[SECRETS_MANAGEMENT.md](SECRETS_MANAGEMENT.md)** | Credential & secret management and rotation | DevOps, Backend Leads |
-| **[CREDENTIALS_AUDIT.md](CREDENTIALS_AUDIT.md)** | Rotation checklist & security audit | DevOps, Backend Leads |
 
 ### Code Tools
 
@@ -717,7 +716,6 @@ You now have everything needed to test, deploy, and maintain the NibblAI backend
 - **Run the test suite** after every change: `python manage.py test --settings=core.settings.test`.
 - **Keep migrations clean:** run `python manage.py makemigrations --check --dry-run` before merging.
 - **Re-seed test data** when schemas change: `python manage.py seed_nibblai --flush`.
-- **Rotate secrets** per [CREDENTIALS_AUDIT.md](CREDENTIALS_AUDIT.md).
 - **Run background jobs on cron** (see [Background Jobs](#background-jobs)) until Celery Beat is added.
 - **Verify the OpenAPI schema** stays valid after API changes (served at `/api/schema/`).
 - **Re-run the deploy check** before each production release: `python manage.py check --deploy --settings=core.settings.prod`.
@@ -777,7 +775,6 @@ python manage.py refresh_analytics          # recompute analytics snapshots
 - **[API_TESTING_GUIDE.md](API_TESTING_GUIDE.md)** — Complete 8-phase testing guide (1200+ lines).
 - **[DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md)** — Pre-prod → prod deployment steps.
 - **[SECRETS_MANAGEMENT.md](SECRETS_MANAGEMENT.md)** — API key & secret management and rotation.
-- **[CREDENTIALS_AUDIT.md](CREDENTIALS_AUDIT.md)** — Rotation checklist & security audit.
 - **[.env.example](.env.example)** — Full inventory of all 40+ environment variables.
 
 ### API URLs
@@ -792,4 +789,3 @@ python manage.py refresh_analytics          # recompute analytics snapshots
 
 **Status:** Production-Ready 🚀
 **Audience:** QA, Frontend, Mobile, Backend, DevOps
-**Last Updated:** 2026-06-05
