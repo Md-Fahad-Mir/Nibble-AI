@@ -603,21 +603,83 @@ The script creates:
 
 # Phase 3: Postman Testing Guide
 
+This phase provides a copy-paste Postman example for **every endpoint** in the
+backend — all 16 modules, authenticated and public, consumer/brand/admin. A QA
+engineer can test the entire API from this section alone.
+
 ## How to Use This Guide
 
 Each endpoint is documented with:
-- **Endpoint** — Full URL path
-- **Method** — HTTP method
-- **Headers** — Required request headers
-- **Auth** — Authentication requirement
-- **Request Body** — JSON payload (if applicable)
-- **Success Response** — 200/201 response
-- **Error Responses** — Common error cases
-- **Notes** — Special requirements
 
-## Authentication Endpoints
+- **Method / URL** — HTTP verb + full path (all routes are versioned under `/api/v1/`)
+- **Auth** — authentication & permission requirement
+- **Headers** — required request headers
+- **Path / Query params** — when applicable
+- **Request Body** — JSON or multipart payload (when applicable)
+- **Success Response** — status code + body
+- **Errors** — notable error cases (see also [Common Error Responses](#common-error-responses))
+- **Notes** — setup, dependencies, required role
 
-### 1. Register User
+### Conventions
+
+- **Base URL:** `http://localhost:8000` (local) — prepend to every path below.
+- **Auth header:** authenticated endpoints require `Authorization: Bearer {access_token}`.
+  Admin-only endpoints require a token for a user whose `role` is `admin` (shown as `{admin_access_token}`).
+- **Brand roles:** brand endpoints require an active **membership**. Write actions
+  additionally require a **manager** role (`owner` or `admin`) on a non-suspended brand.
+- **Content type:** send `Content-Type: application/json` for JSON bodies;
+  `multipart/form-data` for file uploads.
+- **Pagination:** endpoints backed by `ListAPIView` return a paged envelope
+  `{ "count", "next", "previous", "results": [...] }` and accept `?page=N` (page size 20).
+  All other list endpoints return a **plain JSON array**. Each entry notes which it is.
+- **Money fields** are serialized as decimal **strings** (e.g. `"99.00"`).
+- **IDs** are UUID strings.
+- **OpenAPI:** the same contract is live at `/api/docs/` (Swagger) and `/api/schema/`.
+
+---
+
+## Health & Status
+
+### 1. Health Check
+
+- **Method / URL:** `GET /api/v1/health/`
+- **Auth:** None (public)
+- **Headers:** none
+
+```
+GET /api/v1/health/
+
+Success (200):
+{
+  "status": "ok",
+  "service": "nibblai-backend",
+  "version": "0.1.0",
+  "database": "ok"
+}
+
+Degraded (503): returned when the database is unreachable
+{
+  "status": "degraded",
+  "service": "nibblai-backend",
+  "version": "0.1.0",
+  "database": "unavailable"
+}
+```
+
+**Notes:** Liveness/readiness probe for load balancers and uptime checks. No auth, no setup.
+
+---
+
+## Authentication APIs
+
+> Module tag: `auth`. Endpoints marked **(throttled)** use the stricter `auth`
+> scope (default **10/min**) to resist brute force.
+
+### 2. Register User — (throttled)
+
+- **Method / URL:** `POST /api/v1/auth/register/`
+- **Auth:** None (public)
+- **Headers:** `Content-Type: application/json`
 
 ```
 POST /api/v1/auth/register/
@@ -645,12 +707,20 @@ Success (201):
 }
 
 Errors:
-- 400: Email already exists
-- 400: Password too weak
-- 400: Terms not accepted
+- 400: A user with this email already exists
+- 400: Password too weak (Django password validators)
+- 400: You must accept the terms and conditions
 ```
 
-### 2. Verify Email
+**Notes:** Creates a **pending** registration; the user record is materialized on
+email verification (hence `id: null`). `referral_code` is optional. An email
+verification code is sent (printed to the console in dev).
+
+### 3. Verify Email
+
+- **Method / URL:** `POST /api/v1/auth/verify-email/`
+- **Auth:** None (public)
+- **Headers:** `Content-Type: application/json`
 
 ```
 POST /api/v1/auth/verify-email/
@@ -665,8 +735,13 @@ Success (200):
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "email": "john@example.com",
+  "phone": null,
   "full_name": "John Doe",
-  "is_email_verified": true
+  "role": "consumer",
+  "is_email_verified": true,
+  "is_phone_verified": false,
+  "referral_code": "JD2024A1B2",
+  "created_at": "2026-06-05T10:00:00Z"
 }
 
 Errors:
@@ -674,7 +749,35 @@ Errors:
 - 400: Email not found
 ```
 
-### 3. Login
+**Notes:** Depends on **Register** (step 2). In dev the 6-digit code is printed to
+the console; or read it from `accounts_verificationcode`. Materializes the real
+`User` and assigns a `referral_code`.
+
+### 4. Resend Email Verification
+
+- **Method / URL:** `POST /api/v1/auth/resend-email-verification/`
+- **Auth:** None (public)
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/auth/resend-email-verification/
+Content-Type: application/json
+
+{
+  "email": "john@example.com"
+}
+
+Success (202): (no body)
+```
+
+**Notes:** Always returns **202** even if the email is unknown (prevents account
+enumeration). Re-issues the verification code.
+
+### 5. Login — (throttled)
+
+- **Method / URL:** `POST /api/v1/auth/login/`
+- **Auth:** None (public)
+- **Headers:** `Content-Type: application/json`
 
 ```
 POST /api/v1/auth/login/
@@ -695,26 +798,45 @@ Success (200):
 Errors:
 - 400: Invalid email or password
 - 400: Email not verified
-- 401: Account suspended
+- 400: Account suspended
 ```
 
-### 4. Refresh Token
+**Notes:** Requires a **verified** email. `remember_me: true` extends refresh
+lifetime. Save both tokens as Postman environment variables (`access_token`,
+`refresh_token`).
+
+### 6. Refresh Token
+
+- **Method / URL:** `POST /api/v1/auth/token/refresh/`
+- **Auth:** None (public) — the refresh token is supplied in the body
+- **Headers:** `Content-Type: application/json`
 
 ```
-GET /api/v1/auth/token/refresh/
-Authorization: Bearer {refresh_token}
+POST /api/v1/auth/token/refresh/
+Content-Type: application/json
 
-Success (200):
 {
-  "access": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
   "refresh": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..."
 }
 
+Success (200):
+{
+  "access": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..."
+}
+
 Errors:
-- 401: Token expired or invalid
+- 401: Token is invalid or expired
 ```
 
-### 5. Logout
+**Notes:** Standard SimpleJWT view. With refresh-token rotation enabled the
+response may also include a new `refresh`. Send the refresh token in the **body**,
+not the Authorization header.
+
+### 7. Logout
+
+- **Method / URL:** `POST /api/v1/auth/logout/`
+- **Auth:** Bearer access token
+- **Headers:** `Authorization: Bearer {access_token}`, `Content-Type: application/json`
 
 ```
 POST /api/v1/auth/logout/
@@ -725,18 +847,101 @@ Content-Type: application/json
   "refresh": "{refresh_token}"
 }
 
-Success (205):
-(No content)
+Success (205): (no content)
 
 Errors:
-- 400: Invalid refresh token
+- 400: Invalid or expired refresh token
 ```
+
+**Notes:** Blacklists the supplied refresh token. The access token remains valid
+until it expires (short-lived).
+
+### 8. Forgot Password (Request Reset) — (throttled)
+
+- **Method / URL:** `POST /api/v1/auth/password/forgot/`
+- **Auth:** None (public)
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/auth/password/forgot/
+Content-Type: application/json
+
+{
+  "email": "john@example.com"
+}
+
+Success (202): (no body)
+```
+
+**Notes:** Always **202** (no account enumeration). Emails a reset code (console in dev).
+
+### 9. Reset Password
+
+- **Method / URL:** `POST /api/v1/auth/password/reset/`
+- **Auth:** None (public)
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/auth/password/reset/
+Content-Type: application/json
+
+{
+  "email": "john@example.com",
+  "code": "123456",
+  "new_password": "NewSecurePass456!"
+}
+
+Success (200):
+{
+  "detail": "Password has been reset."
+}
+
+Errors:
+- 400: Invalid or expired code
+- 400: New password too weak
+```
+
+**Notes:** Depends on **Forgot Password** (step 8) to obtain the code.
+
+### 10. Social Login (Scaffold) — (throttled)
+
+- **Method / URL:** `POST /api/v1/auth/social/`
+- **Auth:** None (public)
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/auth/social/
+Content-Type: application/json
+
+{
+  "provider": "google",
+  "token": "oauth-provider-token"
+}
+
+Success (200):
+{
+  "access": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
+  "refresh": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..."
+}
+
+Errors:
+- 400: Social login is not configured (scaffold — OAuth not yet wired)
+```
+
+**Notes:** `provider` ∈ `google`, `apple` (per `SocialAccount.Provider`). Returns
+"not configured" until OAuth verification is implemented.
 
 ---
 
-## User Profile Endpoints
+## User APIs
 
-### 6. Get Current User
+> Module tag: `users`. All endpoints require a Bearer access token.
+
+### 11. Get Current User (Profile)
+
+- **Method / URL:** `GET /api/v1/users/me/`
+- **Auth:** Bearer access token
+- **Headers:** `Authorization: Bearer {access_token}`
 
 ```
 GET /api/v1/users/me/
@@ -756,10 +961,14 @@ Success (200):
 }
 
 Errors:
-- 401: Unauthorized
+- 401: Authentication credentials were not provided
 ```
 
-### 7. Update Profile
+### 12. Update Profile
+
+- **Method / URL:** `PATCH /api/v1/users/me/`
+- **Auth:** Bearer access token
+- **Headers:** `Authorization: Bearer {access_token}`, `Content-Type: application/json`
 
 ```
 PATCH /api/v1/users/me/
@@ -767,24 +976,38 @@ Authorization: Bearer {access_token}
 Content-Type: application/json
 
 {
-  "full_name": "John Michael Doe",
-  "phone": "+15559876543"
+  "full_name": "John Michael Doe"
 }
 
-Success (200):
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "email": "john@example.com",
-  "phone": "+15559876543",
-  "full_name": "John Michael Doe",
-  "is_email_verified": true
-}
+Success (200): full UserSerializer (see step 11) with the updated name
 ```
 
-### 8. Change Password
+**Notes:** Only `full_name` is editable here. Email is immutable; phone is changed
+via the phone endpoints (steps 14–15).
+
+### 13. Delete Account
+
+- **Method / URL:** `DELETE /api/v1/users/me/`
+- **Auth:** Bearer access token
+- **Headers:** `Authorization: Bearer {access_token}`
 
 ```
-PATCH /api/v1/users/me/change-password/
+DELETE /api/v1/users/me/
+Authorization: Bearer {access_token}
+
+Success (204): (no content)
+```
+
+**Notes:** Soft-deletes the account (preserves audit trails).
+
+### 14. Change Password
+
+- **Method / URL:** `POST /api/v1/users/me/change-password/`
+- **Auth:** Bearer access token
+- **Headers:** `Authorization: Bearer {access_token}`, `Content-Type: application/json`
+
+```
+POST /api/v1/users/me/change-password/
 Authorization: Bearer {access_token}
 Content-Type: application/json
 
@@ -799,23 +1022,252 @@ Success (200):
 }
 
 Errors:
-- 400: Current password incorrect
+- 400: Current password is incorrect
 - 400: New password too weak
+```
+
+### 15. Add / Change Phone
+
+- **Method / URL:** `POST /api/v1/users/me/phone/`
+- **Auth:** Bearer access token
+- **Headers:** `Authorization: Bearer {access_token}`, `Content-Type: application/json`
+
+```
+POST /api/v1/users/me/phone/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "phone": "+15559876543"
+}
+
+Success (202): (no body)
+
+Errors:
+- 400: Phone already in use
+```
+
+**Notes:** Starts phone verification and sends a code (console in dev). Confirm via step 16.
+
+### 16. Verify Phone
+
+- **Method / URL:** `POST /api/v1/users/me/phone/verify/`
+- **Auth:** Bearer access token
+- **Headers:** `Authorization: Bearer {access_token}`, `Content-Type: application/json`
+
+```
+POST /api/v1/users/me/phone/verify/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "code": "123456"
+}
+
+Success (200): full UserSerializer with "is_phone_verified": true
+
+Errors:
+- 400: Invalid or expired code
+```
+
+**Notes:** Depends on **Add Phone** (step 15).
+
+### 17. Referral Overview
+
+- **Method / URL:** `GET /api/v1/users/me/referrals/`
+- **Auth:** Bearer access token
+- **Headers:** `Authorization: Bearer {access_token}`
+
+```
+GET /api/v1/users/me/referrals/
+Authorization: Bearer {access_token}
+
+Success (200):
+{
+  "referral_code": "JD2024A1B2",
+  "total_referrals": 2,
+  "referrals": [
+    {
+      "id": "user-aaa",
+      "full_name": "Referred Friend",
+      "created_at": "2026-05-20T10:00:00Z"
+    }
+  ]
+}
 ```
 
 ---
 
-## Brand Management Endpoints
+## Billing & Plan APIs
 
-### 9. List User's Brands
+> Module tag: `plans`. Public read-only catalogue.
+
+### 18. List Plans
+
+- **Method / URL:** `GET /api/v1/plans/`
+- **Auth:** None (public)
+- **Headers:** none
+
+```
+GET /api/v1/plans/
+
+Success (200): (paginated)
+{
+  "count": 3,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": "plan-starter",
+      "slug": "starter",
+      "name": "Starter",
+      "description": "For small brands getting started",
+      "monthly_price": "99.00",
+      "rebate_fee_percent": "10.00",
+      "review_fee": "1.00",
+      "data_access_level": "anonymized",
+      "customer_data_module": false,
+      "sort_order": 1
+    }
+  ]
+}
+```
+
+**Notes:** Only `is_active` plans are returned. `data_access_level` ∈ `anonymized`, `full`.
+
+### 19. Get Plan (by slug)
+
+- **Method / URL:** `GET /api/v1/plans/{slug}/`
+- **Auth:** None (public)
+- **Path params:** `slug` ∈ `starter`, `pro`, `scale`
+
+```
+GET /api/v1/plans/pro/
+
+Success (200):
+{
+  "id": "plan-pro",
+  "slug": "pro",
+  "name": "Pro",
+  "description": "Full customer data access",
+  "monthly_price": "299.00",
+  "rebate_fee_percent": "7.00",
+  "review_fee": "1.00",
+  "data_access_level": "full",
+  "customer_data_module": true,
+  "sort_order": 2
+}
+
+Errors:
+- 404: Not found
+```
+
+**Notes:** The lookup key is the plan **slug**, not its UUID.
+
+---
+
+## Brand Application APIs
+
+> Module tag: `brand-applications`. A user applies to run a brand; a platform
+> admin approves/rejects (see Admin — Brand Management).
+
+### 20. List My Applications
+
+- **Method / URL:** `GET /api/v1/brand-applications/`
+- **Auth:** Bearer access token
+- **Headers:** `Authorization: Bearer {access_token}`
+
+```
+GET /api/v1/brand-applications/
+Authorization: Bearer {access_token}
+
+Success (200): (paginated) — only the caller's own applications
+{
+  "count": 1,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": "app-001",
+      "brand_name": "Acme Corp",
+      "contact_email": "owner@acme.com",
+      "website": "https://acme.com",
+      "message": "We'd like to run rebate campaigns.",
+      "requested_plan": "pro",
+      "status": "pending",
+      "decision_reason": "",
+      "brand": null,
+      "reviewed_at": null,
+      "created_at": "2026-06-05T10:00:00Z"
+    }
+  ]
+}
+```
+
+### 21. Submit Brand Application
+
+- **Method / URL:** `POST /api/v1/brand-applications/`
+- **Auth:** Bearer access token
+- **Headers:** `Authorization: Bearer {access_token}`, `Content-Type: application/json`
+
+```
+POST /api/v1/brand-applications/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "brand_name": "Acme Corp",
+  "contact_email": "owner@acme.com",
+  "website": "https://acme.com",
+  "message": "We'd like to run rebate campaigns.",
+  "requested_plan": "pro"
+}
+
+Success (201): BrandApplicationSerializer with "status": "pending"
+
+Errors:
+- 400: brand_name and contact_email are required
+- 400: You already have a pending application
+```
+
+**Notes:** `requested_plan` is an optional plan **slug** (`starter`/`pro`/`scale`).
+Approval creates the `Brand` and an owner membership for the applicant.
+
+### 22. Get Application Detail
+
+- **Method / URL:** `GET /api/v1/brand-applications/{pk}/`
+- **Auth:** Bearer access token
+- **Path params:** `pk` (UUID)
+
+```
+GET /api/v1/brand-applications/app-001/
+Authorization: Bearer {access_token}
+
+Success (200): BrandApplicationSerializer
+
+Errors:
+- 404: Not found (or not the caller's application)
+```
+
+---
+
+## Brand APIs
+
+> Module tag: `brands`. Requires brand **membership**; writes require a **manager**
+> (owner/admin) role on a non-suspended brand.
+
+### 23. List My Brands
+
+- **Method / URL:** `GET /api/v1/brands/`
+- **Auth:** Bearer access token
 
 ```
 GET /api/v1/brands/
 Authorization: Bearer {access_token}
 
-Success (200):
+Success (200): (paginated)
 {
-  "count": 2,
+  "count": 1,
   "next": null,
   "previous": null,
   "results": [
@@ -823,101 +1275,400 @@ Success (200):
       "id": "brand-001",
       "name": "Acme Corp",
       "slug": "acme-corp",
+      "legal_name": "Acme Corporation LLC",
+      "description": "Premium gadgets",
       "website": "https://acme.com",
-      "plan": "starter",
-      "is_operational": true,
+      "logo_url": "https://cdn.acme.com/logo.png",
+      "contact_email": "hello@acme.com",
+      "status": "active",
+      "plan": {
+        "id": "plan-pro",
+        "slug": "pro",
+        "name": "Pro",
+        "monthly_price": "299.00",
+        "rebate_fee_percent": "7.00",
+        "review_fee": "1.00",
+        "data_access_level": "full",
+        "customer_data_module": true,
+        "sort_order": 2
+      },
       "created_at": "2026-05-01T10:00:00Z"
     }
   ]
 }
 ```
 
-### 10. Create Brand
+**Notes:** Returns only brands the caller is a member of.
+
+### 24. Get Brand Detail
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/`
+- **Auth:** Bearer access token (member)
+- **Path params:** `brand_id` (UUID)
 
 ```
-POST /api/v1/brands/
+GET /api/v1/brands/brand-001/
+Authorization: Bearer {access_token}
+
+Success (200): BrandSerializer (see step 23, single object)
+
+Errors:
+- 403: You are not a member of this brand
+- 404: Brand not found
+```
+
+### 25. Update Brand
+
+- **Method / URL:** `PATCH /api/v1/brands/{brand_id}/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+PATCH /api/v1/brands/brand-001/
 Authorization: Bearer {access_token}
 Content-Type: application/json
 
 {
-  "name": "New Brand",
-  "website": "https://newbrand.com",
-  "phone": "+15551234567"
-}
-
-Success (201):
-{
-  "id": "brand-new-001",
-  "name": "New Brand",
-  "slug": "new-brand",
-  "website": "https://newbrand.com",
-  "created_at": "2026-06-05T10:00:00Z"
-}
-
-Errors:
-- 400: Name required
-- 400: Slug already exists
-```
-
-### 11. Get Brand Details
-
-```
-GET /api/v1/brands/{brand_id}/
-Authorization: Bearer {access_token}
-
-Success (200):
-{
-  "id": "brand-001",
-  "name": "Acme Corp",
-  "slug": "acme-corp",
+  "legal_name": "Acme Corporation LLC",
+  "description": "Premium gadgets and accessories",
   "website": "https://acme.com",
-  "plan": {
-    "id": "plan-starter",
-    "name": "Starter",
-    "slug": "starter",
-    "price_per_month": "99.00"
-  },
-  "is_operational": true,
-  "members_count": 3,
-  "created_at": "2026-05-01T10:00:00Z"
+  "logo_url": "https://cdn.acme.com/logo.png",
+  "contact_email": "hello@acme.com"
 }
 
+Success (200): updated BrandSerializer
+
 Errors:
-- 403: Not a member of this brand
-- 404: Brand not found
+- 403: Brand owner/admin role required
+- 403: This brand is suspended
 ```
 
-### 12. List Brand Members
+**Notes:** `name`/`slug`/`status`/`plan` are read-only here (plan changes are admin-only).
+
+### 26. List Brand Members
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/members/`
+- **Auth:** Bearer access token (member)
 
 ```
-GET /api/v1/brands/{brand_id}/members/
+GET /api/v1/brands/brand-001/members/
 Authorization: Bearer {access_token}
 
-Success (200):
+Success (200): plain array
+[
+  {
+    "id": "membership-001",
+    "user": "user-001",
+    "user_email": "owner@acme.com",
+    "user_full_name": "John Doe",
+    "role": "owner",
+    "is_active": true,
+    "created_at": "2026-05-01T10:00:00Z"
+  }
+]
+```
+
+**Notes:** Returns a plain array (not paginated).
+
+### 27. Add Brand Member
+
+- **Method / URL:** `POST /api/v1/brands/{brand_id}/members/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/brands/brand-001/members/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
 {
-  "count": 3,
-  "results": [
+  "email": "teammate@acme.com",
+  "role": "member"
+}
+
+Success (201): BrandMembershipSerializer
+
+Errors:
+- 400: No user with that email / already a member
+- 403: Brand owner/admin role required
+```
+
+**Notes:** `role` ∈ `admin`, `member` (default `member`). The target user must
+already have an account.
+
+### 28. Remove Brand Member
+
+- **Method / URL:** `DELETE /api/v1/brands/{brand_id}/members/{membership_id}/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Path params:** `brand_id`, `membership_id` (UUIDs)
+
+```
+DELETE /api/v1/brands/brand-001/members/membership-002/
+Authorization: Bearer {access_token}
+
+Success (204): (no content)
+
+Errors:
+- 404: Membership not found
+- 400: Cannot remove the last owner
+```
+
+### 29. List Brand Customers (plan-gated)
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/customers/`
+- **Auth:** Bearer access token (member)
+
+```
+GET /api/v1/brands/brand-001/customers/
+Authorization: Bearer {access_token}
+
+Success (200) — Pro/Scale (full data access):
+{
+  "data_access": "full",
+  "count": 2,
+  "customers": [
     {
-      "id": "membership-001",
-      "user_id": "user-001",
-      "user": {
-        "id": "user-001",
-        "email": "john@example.com",
-        "full_name": "John Doe"
-      },
-      "role": "owner",
-      "is_manager": true,
-      "joined_at": "2026-05-01T10:00:00Z"
+      "customer_ref": "cust_9f1c2a3b4d5e",
+      "redemptions": 3,
+      "reviews": 1,
+      "total_earned": "12.50",
+      "email": "buyer@example.com",
+      "full_name": "Jane Buyer"
+    }
+  ]
+}
+
+Success (200) — Starter (anonymized): email/full_name are null
+{
+  "data_access": "anonymized",
+  "count": 2,
+  "customers": [
+    {
+      "customer_ref": "cust_9f1c2a3b4d5e",
+      "redemptions": 3,
+      "reviews": 1,
+      "total_earned": "12.50",
+      "email": null,
+      "full_name": null
     }
   ]
 }
 ```
 
+**Notes:** Shows only customers who engaged with **this** brand. PII is masked for
+Starter (anonymized) plans and shown for Pro/Scale (full). `customer_ref` is a
+stable, opaque per-brand hash.
+
 ---
 
-## Wallet & Transactions
+## Admin — Brand Management APIs
 
-### 13. Get Customer Wallet
+> Module tag: `admin-brands`. All require a **platform admin** token.
+
+### 30. List Brand Applications (admin)
+
+- **Method / URL:** `GET /api/v1/admin/brand-applications/`
+- **Auth:** Bearer admin token
+- **Query params:** `status` (optional) ∈ `pending`, `approved`, `rejected`
+
+```
+GET /api/v1/admin/brand-applications/?status=pending
+Authorization: Bearer {admin_access_token}
+
+Success (200): (paginated) array of BrandApplicationSerializer
+
+Errors:
+- 403: Platform admin access required
+```
+
+### 31. Approve Application (admin)
+
+- **Method / URL:** `POST /api/v1/admin/brand-applications/{application_id}/approve/`
+- **Auth:** Bearer admin token
+- **Path params:** `application_id` (UUID)
+
+```
+POST /api/v1/admin/brand-applications/app-001/approve/
+Authorization: Bearer {admin_access_token}
+
+(no request body)
+
+Success (200): BrandSerializer for the newly created brand
+
+Errors:
+- 400: Application already decided
+- 404: Application not found
+```
+
+**Notes:** Creates the `Brand`, assigns the requested plan, and makes the applicant
+the owner. Writes an audit log.
+
+### 32. Reject Application (admin)
+
+- **Method / URL:** `POST /api/v1/admin/brand-applications/{application_id}/reject/`
+- **Auth:** Bearer admin token
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/admin/brand-applications/app-001/reject/
+Authorization: Bearer {admin_access_token}
+Content-Type: application/json
+
+{
+  "reason": "Incomplete business details"
+}
+
+Success (200): BrandApplicationSerializer with "status": "rejected"
+
+Errors:
+- 404: Application not found
+```
+
+**Notes:** `reason` is optional.
+
+### 33. List All Brands (admin)
+
+- **Method / URL:** `GET /api/v1/admin/brands/`
+- **Auth:** Bearer admin token
+- **Query params:** `status` (optional) ∈ `active`, `suspended`
+
+```
+GET /api/v1/admin/brands/?status=active
+Authorization: Bearer {admin_access_token}
+
+Success (200): (paginated) array of BrandSerializer
+```
+
+### 34. Suspend Brand (admin)
+
+- **Method / URL:** `POST /api/v1/admin/brands/{brand_id}/suspend/`
+- **Auth:** Bearer admin token
+
+```
+POST /api/v1/admin/brands/brand-001/suspend/
+Authorization: Bearer {admin_access_token}
+
+(no request body)
+
+Success (200): BrandSerializer with "status": "suspended"
+
+Errors:
+- 404: Brand not found
+```
+
+**Notes:** Suspended brands cannot run write operations or campaigns.
+
+### 35. Reactivate Brand (admin)
+
+- **Method / URL:** `POST /api/v1/admin/brands/{brand_id}/reactivate/`
+- **Auth:** Bearer admin token
+
+```
+POST /api/v1/admin/brands/brand-001/reactivate/
+Authorization: Bearer {admin_access_token}
+
+(no request body)
+
+Success (200): BrandSerializer with "status": "active"
+```
+
+---
+
+## Wallet APIs
+
+> Module tag: `wallets`. Brand (escrow) wallet requires membership; funding
+> requires a manager. The customer wallet is the caller's own.
+
+### 36. Get Brand Wallet
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/wallet/`
+- **Auth:** Bearer access token (member)
+
+```
+GET /api/v1/brands/brand-001/wallet/
+Authorization: Bearer {access_token}
+
+Success (200):
+{
+  "id": "wallet-brand-001",
+  "kind": "brand",
+  "currency": "USD",
+  "balance": "2000.00",
+  "held": "500.00",
+  "available": "1500.00",
+  "updated_at": "2026-06-05T10:00:00Z"
+}
+```
+
+**Notes:** `available = balance − held`. The wallet is auto-created on first access.
+
+### 37. List Brand Wallet Transactions
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/wallet/transactions/`
+- **Auth:** Bearer access token (member)
+- **Query params:** `page` (pagination)
+
+```
+GET /api/v1/brands/brand-001/wallet/transactions/?page=1
+Authorization: Bearer {access_token}
+
+Success (200): (paginated)
+{
+  "count": 42,
+  "next": "http://localhost:8000/api/v1/brands/brand-001/wallet/transactions/?page=2",
+  "previous": null,
+  "results": [
+    {
+      "id": "ledger-001",
+      "entry_type": "credit",
+      "amount": "1000.00",
+      "signed_amount": "1000.00",
+      "category": "funding",
+      "balance_after": "2000.00",
+      "reference_type": "funding",
+      "reference_id": "",
+      "description": "Wallet funding (mock)",
+      "created_at": "2026-06-04T16:00:00Z"
+    }
+  ]
+}
+```
+
+**Notes:** Append-only ledger. `category` ∈ `funding`, `rebate_reward`,
+`rebate_fee`, `review_reward`, `review_fee`, `subscription`, `payout`,
+`referral_bonus`, `adjustment`.
+
+### 38. Fund Brand Wallet
+
+- **Method / URL:** `POST /api/v1/brands/{brand_id}/wallet/fund/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/brands/brand-001/wallet/fund/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "amount": "1000.00",
+  "idempotency_key": "fund-123-abc"
+}
+
+Success (200): WalletSerializer with the new balance
+
+Errors:
+- 400: amount must be at least 0.01
+- 403: Brand owner/admin role required
+- 403: This brand is suspended
+```
+
+**Notes:** Mock funding provider (no real payment). `idempotency_key` is optional;
+re-sending the same key will not double-credit (ledger dedupe).
+
+### 39. Get Customer Wallet
+
+- **Method / URL:** `GET /api/v1/wallet/`
+- **Auth:** Bearer access token (the caller's own wallet)
 
 ```
 GET /api/v1/wallet/
@@ -935,26 +1686,31 @@ Success (200):
 }
 ```
 
-### 14. List Wallet Transactions
+### 40. List Customer Wallet Transactions
+
+- **Method / URL:** `GET /api/v1/wallet/transactions/`
+- **Auth:** Bearer access token
+- **Query params:** `page`
 
 ```
-GET /api/v1/wallet/transactions/
+GET /api/v1/wallet/transactions/?page=1
 Authorization: Bearer {access_token}
-Params: page=1&limit=20
 
-Success (200):
+Success (200): (paginated) array of LedgerEntrySerializer
 {
-  "count": 42,
-  "next": "...?page=2",
+  "count": 5,
+  "next": null,
+  "previous": null,
   "results": [
     {
-      "id": "ledger-001",
+      "id": "ledger-100",
       "entry_type": "credit",
       "amount": "2.55",
-      "signed_amount": "+2.55",
-      "category": "reward",
+      "signed_amount": "2.55",
+      "category": "rebate_reward",
       "balance_after": "125.75",
       "reference_type": "redemption",
+      "reference_id": "redemption-001",
       "description": "Reward from campaign: Summer Promotion",
       "created_at": "2026-06-04T16:00:00Z"
     }
@@ -962,276 +1718,2049 @@ Success (200):
 }
 ```
 
-### 15. Fund Brand Wallet
+---
+
+## Product APIs
+
+> Module tag: `products`. Brand-scoped: reads require membership, writes require a
+> manager on a non-suspended brand. `brand_id` is a path param on every route.
+
+### 41. List Products
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/products/`
+- **Auth:** Bearer access token (member)
 
 ```
-POST /api/v1/brands/{brand_id}/wallet/fund/
+GET /api/v1/brands/brand-001/products/
+Authorization: Bearer {access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "prod-001",
+    "name": "iPhone 15 Pro Max",
+    "sku": "IPHONE15PM256GB",
+    "description": "Apple iPhone 15 Pro Max 256GB",
+    "image_url": "https://cdn.acme.com/iphone.png",
+    "category": "Electronics",
+    "is_active": true,
+    "alias_count": 2,
+    "created_at": "2026-06-05T10:00:00Z"
+  }
+]
+```
+
+### 42. Create Product
+
+- **Method / URL:** `POST /api/v1/brands/{brand_id}/products/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/brands/brand-001/products/
 Authorization: Bearer {access_token}
 Content-Type: application/json
 
 {
-  "amount": "1000.00",
-  "idempotency_key": "fund-123-abc"
+  "name": "iPhone 15 Pro Max",
+  "sku": "IPHONE15PM256GB",
+  "description": "Apple iPhone 15 Pro Max 256GB",
+  "image_url": "https://cdn.acme.com/iphone.png",
+  "category": "Electronics"
 }
 
-Success (200):
+Success (201): ProductSerializer (see step 41)
+
+Errors:
+- 400: name is required / duplicate SKU
+- 403: Brand owner/admin role required
+```
+
+### 43. Match Product (utility)
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/products/match/`
+- **Auth:** Bearer access token (member)
+- **Query params:** `text` (required) — receipt line text to resolve
+
+```
+GET /api/v1/brands/brand-001/products/match/?text=iphone%2015%20pro
+Authorization: Bearer {access_token}
+
+Success (200) — matched:
 {
-  "id": "wallet-brand-001",
-  "kind": "brand",
-  "balance": "2000.00",
-  "held": "500.00",
-  "available": "1500.00"
+  "matched": true,
+  "product": { ...ProductSerializer... }
+}
+
+Success (200) — no match:
+{
+  "matched": false,
+  "product": null
 }
 
 Errors:
-- 403: You must be a manager
-- 400: Brand is suspended
-- 400: Invalid amount
+- 400: text query parameter is required
 ```
 
----
+**Notes:** Read-only preview of the alias-matching engine; creates nothing.
 
-## Campaigns
+### 44. Get Product Detail
 
-### 16. List Campaigns
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/products/{product_id}/`
+- **Auth:** Bearer access token (member)
 
 ```
-GET /api/v1/brands/{brand_id}/campaigns/
+GET /api/v1/brands/brand-001/products/prod-001/
 Authorization: Bearer {access_token}
-Params: status=active&page=1
 
-Success (200):
+Success (200): ProductSerializer
+
+Errors:
+- 404: Product not found
+```
+
+### 45. Update Product
+
+- **Method / URL:** `PATCH /api/v1/brands/{brand_id}/products/{product_id}/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+PATCH /api/v1/brands/brand-001/products/prod-001/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
 {
-  "count": 5,
+  "description": "Apple iPhone 15 Pro Max 256GB — Titanium",
+  "category": "Electronics"
+}
+
+Success (200): updated ProductSerializer
+```
+
+### 46. Delete (Archive) Product
+
+- **Method / URL:** `DELETE /api/v1/brands/{brand_id}/products/{product_id}/`
+- **Auth:** Bearer access token (manager, non-suspended)
+
+```
+DELETE /api/v1/brands/brand-001/products/prod-001/
+Authorization: Bearer {access_token}
+
+Success (204): (no content)
+```
+
+**Notes:** Archives the product (sets `is_active=false`); preserves history.
+
+### 47. List Product Aliases
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/products/{product_id}/aliases/`
+- **Auth:** Bearer access token (member)
+
+```
+GET /api/v1/brands/brand-001/products/prod-001/aliases/
+Authorization: Bearer {access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "alias-001",
+    "alias_text": "iPhone 15 PM",
+    "normalized": "iphone 15 pm",
+    "created_at": "2026-06-05T10:00:00Z"
+  }
+]
+```
+
+### 48. Add Product Alias
+
+- **Method / URL:** `POST /api/v1/brands/{brand_id}/products/{product_id}/aliases/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/brands/brand-001/products/prod-001/aliases/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "alias_text": "iPhone 15 PM"
+}
+
+Success (201): ProductAliasSerializer
+
+Errors:
+- 400: Alias already exists
+```
+
+**Notes:** Aliases improve receipt line-item matching.
+
+### 49. Delete Product Alias
+
+- **Method / URL:** `DELETE /api/v1/brands/{brand_id}/products/{product_id}/aliases/{alias_id}/`
+- **Auth:** Bearer access token (manager, non-suspended)
+
+```
+DELETE /api/v1/brands/brand-001/products/prod-001/aliases/alias-001/
+Authorization: Bearer {access_token}
+
+Success (204): (no content)
+
+Errors:
+- 404: Alias not found
+```
+
+### 50. List Tags
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/tags/`
+- **Auth:** Bearer access token (member)
+- **Query params:** `page`
+
+```
+GET /api/v1/brands/brand-001/tags/?page=1
+Authorization: Bearer {access_token}
+
+Success (200): (paginated)
+{
+  "count": 1,
+  "next": null,
+  "previous": null,
   "results": [
     {
-      "id": "camp-001",
-      "name": "Summer Promotion 2026",
-      "description": "Get 10% cashback on all purchases",
-      "status": "active",
-      "start_date": "2026-06-01",
-      "end_date": "2026-08-31",
-      "budget": "10000.00",
-      "remaining_budget": "7500.00",
-      "total_rewards_issued": "2500.00"
+      "id": "tag-001",
+      "product": "prod-001",
+      "product_name": "iPhone 15 Pro Max",
+      "code": "ACME-IP15",
+      "label": "iPhone 15 Pro Max",
+      "created_at": "2026-06-05T10:00:00Z"
     }
   ]
 }
 ```
 
-### 17. Create Campaign
+### 51. Generate Tags
+
+- **Method / URL:** `POST /api/v1/brands/{brand_id}/tags/generate/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
 
 ```
-POST /api/v1/brands/{brand_id}/campaigns/
+POST /api/v1/brands/brand-001/tags/generate/
 Authorization: Bearer {access_token}
 Content-Type: application/json
 
 {
+  "product_ids": ["prod-001", "prod-002"]
+}
+
+Success (201): plain array of TagSerializer
+```
+
+**Notes:** `product_ids` is optional; omit (or send `[]`) to generate tags for all
+products. Tag generation uses the AI seam (deterministic mock when no API key).
+
+---
+
+## Campaign APIs
+
+> Module tag: `campaigns`. Rebate campaign configuration. Brand-scoped: reads need
+> membership, writes need a manager on a non-suspended brand.
+
+### 52. List Campaigns
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/campaigns/`
+- **Auth:** Bearer access token (member)
+
+```
+GET /api/v1/brands/brand-001/campaigns/
+Authorization: Bearer {access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "camp-001",
+    "name": "Summer Promotion 2026",
+    "description": "Cashback on flagship phones",
+    "status": "active",
+    "product": "prod-001",
+    "product_name": "iPhone 15 Pro Max",
+    "daily_budget": "500.00",
+    "min_purchase_units": 1,
+    "is_bogo": false,
+    "cooldown_days": 30,
+    "start_at": "2026-06-01T00:00:00Z",
+    "end_at": "2026-08-31T23:59:59Z",
+    "auto_paused": false,
+    "tiers": [
+      { "id": "tier-1", "reward_amount": "5.00", "allocation_percent": "60.00" },
+      { "id": "tier-2", "reward_amount": "3.00", "allocation_percent": "40.00" }
+    ],
+    "restriction": { "restriction_type": "min_units", "min_units": 1, "description": "Buy 1+" },
+    "fallback_offer": { "reward_amount": "1.00", "is_enabled": true, "description": "Thanks!" },
+    "created_at": "2026-06-05T10:00:00Z"
+  }
+]
+```
+
+**Notes:** Returns a plain array (not paginated). `status` ∈ `draft`, `active`,
+`paused`, `completed`, `archived`.
+
+### 53. Create Campaign
+
+- **Method / URL:** `POST /api/v1/brands/{brand_id}/campaigns/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/brands/brand-001/campaigns/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "product": "prod-001",
   "name": "Q3 Customer Loyalty",
   "description": "Reward our best customers",
-  "start_date": "2026-07-01",
-  "end_date": "2026-09-30",
-  "budget": "5000.00",
-  "tiers": [
-    {
-      "tier": 1,
-      "min_receipt_amount": "0.00",
-      "max_receipt_amount": "50.00",
-      "reward_percent": 10.0,
-      "reward_fixed": "0.00"
-    },
-    {
-      "tier": 2,
-      "min_receipt_amount": "50.01",
-      "max_receipt_amount": "100.00",
-      "reward_percent": 15.0,
-      "reward_fixed": "0.00"
-    }
-  ],
-  "restrictions": []
+  "daily_budget": "500.00",
+  "min_purchase_units": 1,
+  "is_bogo": false,
+  "cooldown_days": 30,
+  "start_at": "2026-07-01T00:00:00Z",
+  "end_at": "2026-09-30T23:59:59Z"
 }
 
-Success (201):
-{
-  "id": "camp-new-001",
-  "name": "Q3 Customer Loyalty",
-  "status": "draft",
-  "created_at": "2026-06-05T10:00:00Z"
-}
+Success (201): CampaignSerializer with "status": "draft"
 
 Errors:
-- 400: Budget must be positive
-- 400: End date must be after start date
-- 403: Insufficient wallet balance
+- 400: product is required / not found
+- 400: daily_budget must be at least 0.01
+- 400: end_at must be after start_at
+```
+
+**Notes:** A campaign targets exactly one `product`. Reward **tiers** and the
+**fallback** offer are configured via separate endpoints (steps 56–57) after
+creation. `cooldown_days` defaults to 30, `min_purchase_units` to 1.
+
+### 54. Get Campaign Detail
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/campaigns/{campaign_id}/`
+- **Auth:** Bearer access token (member)
+
+```
+GET /api/v1/brands/brand-001/campaigns/camp-001/
+Authorization: Bearer {access_token}
+
+Success (200): CampaignSerializer (see step 52)
+
+Errors:
+- 404: Campaign not found
+```
+
+### 55. Update Campaign
+
+- **Method / URL:** `PATCH /api/v1/brands/{brand_id}/campaigns/{campaign_id}/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+PATCH /api/v1/brands/brand-001/campaigns/camp-001/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "name": "Q3 Loyalty (Updated)",
+  "daily_budget": "750.00",
+  "cooldown_days": 45
+}
+
+Success (200): updated CampaignSerializer
+```
+
+**Notes:** All fields optional. `product` cannot be changed here.
+
+### 56. Delete (Archive) Campaign
+
+- **Method / URL:** `DELETE /api/v1/brands/{brand_id}/campaigns/{campaign_id}/`
+- **Auth:** Bearer access token (manager, non-suspended)
+
+```
+DELETE /api/v1/brands/brand-001/campaigns/camp-001/
+Authorization: Bearer {access_token}
+
+Success (204): (no content)
+```
+
+### 57. Get Campaign Tiers
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/campaigns/{campaign_id}/tiers/`
+- **Auth:** Bearer access token (member)
+
+```
+GET /api/v1/brands/brand-001/campaigns/camp-001/tiers/
+Authorization: Bearer {access_token}
+
+Success (200): plain array
+[
+  { "id": "tier-1", "reward_amount": "5.00", "allocation_percent": "60.00" },
+  { "id": "tier-2", "reward_amount": "3.00", "allocation_percent": "40.00" }
+]
+```
+
+### 58. Set Campaign Tiers (replace)
+
+- **Method / URL:** `PUT /api/v1/brands/{brand_id}/campaigns/{campaign_id}/tiers/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+PUT /api/v1/brands/brand-001/campaigns/camp-001/tiers/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "tiers": [
+    { "reward_amount": "5.00", "allocation_percent": "60.00" },
+    { "reward_amount": "3.00", "allocation_percent": "40.00" }
+  ]
+}
+
+Success (200): plain array of RewardTierSerializer
+
+Errors:
+- 400: tiers must not be empty
+- 400: allocation_percent across tiers must total 100
+```
+
+**Notes:** Replaces all tiers. Allocation percentages must sum to 100% (waterfall).
+
+### 59. Set Campaign Fallback Offer
+
+- **Method / URL:** `PUT /api/v1/brands/{brand_id}/campaigns/{campaign_id}/fallback/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+PUT /api/v1/brands/brand-001/campaigns/camp-001/fallback/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "reward_amount": "1.00",
+  "is_enabled": true,
+  "description": "Thanks for shopping!"
+}
+
+Success (200):
+{
+  "reward_amount": "1.00",
+  "is_enabled": true,
+  "description": "Thanks for shopping!"
+}
+```
+
+**Notes:** The fallback is shown when premium tiers are exhausted or the user is in
+cooldown.
+
+### 60. Activate Campaign
+
+- **Method / URL:** `POST /api/v1/brands/{brand_id}/campaigns/{campaign_id}/activate/`
+- **Auth:** Bearer access token (manager, non-suspended)
+
+```
+POST /api/v1/brands/brand-001/campaigns/camp-001/activate/
+Authorization: Bearer {access_token}
+
+(no request body)
+
+Success (200): CampaignSerializer with "status": "active"
+
+Errors:
+- 400: Campaign has no tiers configured
+- 400: Insufficient wallet funding to activate
+```
+
+**Notes:** Requires configured tiers and a funded wallet (funding gate).
+
+### 61. Pause Campaign
+
+- **Method / URL:** `POST /api/v1/brands/{brand_id}/campaigns/{campaign_id}/pause/`
+- **Auth:** Bearer access token (manager, non-suspended)
+
+```
+POST /api/v1/brands/brand-001/campaigns/camp-001/pause/
+Authorization: Bearer {access_token}
+
+(no request body)
+
+Success (200): CampaignSerializer with "status": "paused"
+```
+
+### 62. Get Campaign Access (URL + QR)
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/campaigns/{campaign_id}/access/`
+- **Auth:** Bearer access token (member)
+
+```
+GET /api/v1/brands/brand-001/campaigns/camp-001/access/
+Authorization: Bearer {access_token}
+
+Success (200):
+{
+  "campaign_url": "https://nibbl.ai/c/AbC123xYz",
+  "qr_data": "https://nibbl.ai/q/AbC123xYz"
+}
+```
+
+**Notes:** Lazily creates the campaign's shareable URL + QR token on first call.
+These resolve via the public offer entry points (steps 65–66).
+
+### 63. Preview Campaign
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/campaigns/{campaign_id}/preview/`
+- **Auth:** Bearer access token (member)
+
+```
+GET /api/v1/brands/brand-001/campaigns/camp-001/preview/
+Authorization: Bearer {access_token}
+
+Success (200):
+{
+  "campaign": { ...CampaignSerializer... },
+  "best_offer": "5.00",
+  "campaign_url": "https://nibbl.ai/c/AbC123xYz",
+  "qr_data": "https://nibbl.ai/q/AbC123xYz",
+  "consumes_budget": false,
+  "creates_reservation": false
+}
+```
+
+**Notes:** Read-only — never consumes budget or creates reservations.
+
+---
+
+## Offer APIs
+
+> Module tag: `offers` / `bookmarks`. Consumer discovery. The feed and detail
+> require auth; the by-url / by-qr entry points are **public**.
+
+### 64. Offer Feed
+
+- **Method / URL:** `GET /api/v1/offers/`
+- **Auth:** Bearer access token
+- **Query params:** `search` (free text), `category` (e.g. `explore`, `food`, `beverages`), `page`
+
+```
+GET /api/v1/offers/?search=phone&category=explore&page=1
+Authorization: Bearer {access_token}
+
+Success (200): (paginated) array of resolved offers
+{
+  "count": 1,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "campaign_id": "camp-001",
+      "name": "Summer Promotion 2026",
+      "brand_id": "brand-001",
+      "brand_name": "Acme Corp",
+      "product_id": "prod-001",
+      "product_name": "iPhone 15 Pro Max",
+      "product_image": "https://cdn.acme.com/iphone.png",
+      "category": "Electronics",
+      "offer_type": "premium",
+      "reward_amount": "5.00",
+      "restriction": "Buy 1+",
+      "min_purchase_units": 1,
+      "is_bogo": false,
+      "in_cooldown": false,
+      "claimable": true,
+      "end_at": "2026-08-31T23:59:59Z"
+    }
+  ]
+}
+```
+
+**Notes:** Offers are computed per requesting user (cooldown-aware). `offer_type` is
+`premium`, `fallback`, or `null`; `claimable` is false when nothing is available.
+
+### 65. Resolve Offer by URL (public)
+
+- **Method / URL:** `GET /api/v1/offers/by-url/{token}/`
+- **Auth:** None (public; honors auth if a token is sent)
+- **Path params:** `token` — the campaign URL token
+
+```
+GET /api/v1/offers/by-url/AbC123xYz/
+
+Success (200): a single resolved offer object (see step 64)
+
+Errors:
+- 404: Offer not found
+```
+
+**Notes:** Records an offer view (source `url`). Anonymous access allowed.
+
+### 66. Resolve Offer by QR (public)
+
+- **Method / URL:** `GET /api/v1/offers/by-qr/{token}/`
+- **Auth:** None (public)
+- **Path params:** `token` — the QR token
+
+```
+GET /api/v1/offers/by-qr/AbC123xYz/
+
+Success (200): a single resolved offer object (see step 64)
+
+Errors:
+- 404: Offer not found
+```
+
+**Notes:** Records an offer view (source `qr`).
+
+### 67. Get Offer Detail
+
+- **Method / URL:** `GET /api/v1/offers/{campaign_id}/`
+- **Auth:** Bearer access token
+- **Path params:** `campaign_id` (UUID)
+
+```
+GET /api/v1/offers/camp-001/
+Authorization: Bearer {access_token}
+
+Success (200): a single resolved offer object (see step 64)
+
+Errors:
+- 404: Offer not found
+```
+
+**Notes:** Records an offer view (source `detail`).
+
+### 68. List Bookmarks
+
+- **Method / URL:** `GET /api/v1/bookmarks/`
+- **Auth:** Bearer access token
+
+```
+GET /api/v1/bookmarks/
+Authorization: Bearer {access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "bm-001",
+    "kind": "product",
+    "product": "prod-001",
+    "brand": null,
+    "product_name": "iPhone 15 Pro Max",
+    "brand_name": null,
+    "created_at": "2026-06-05T10:00:00Z"
+  }
+]
+```
+
+### 69. Add Bookmark
+
+- **Method / URL:** `POST /api/v1/bookmarks/`
+- **Auth:** Bearer access token
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/bookmarks/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "kind": "product",
+  "product": "prod-001"
+}
+
+Success (201): BookmarkSerializer
+
+Errors:
+- 400: product is required when kind=product
+- 400: brand is required when kind=brand
+- 400: Already bookmarked
+```
+
+**Notes:** `kind` ∈ `product`, `brand`. Provide `product` for product bookmarks or
+`brand` for brand bookmarks (offers themselves are dynamic and can't be saved).
+
+### 70. Delete Bookmark
+
+- **Method / URL:** `DELETE /api/v1/bookmarks/{bookmark_id}/`
+- **Auth:** Bearer access token
+
+```
+DELETE /api/v1/bookmarks/bm-001/
+Authorization: Bearer {access_token}
+
+Success (204): (no content)
+
+Errors:
+- 404: Bookmark not found
 ```
 
 ---
 
-## Products & Receipts
+## Reservation APIs
 
-### 18. Create Product
+> Module tag: `reservations`. A consumer claims an offer, creating a 7-day hold.
+
+### 71. List Reservations
+
+- **Method / URL:** `GET /api/v1/reservations/`
+- **Auth:** Bearer access token
+- **Query params:** `status` (optional) ∈ `active`, `redeemed`, `expired`, `rejected`, `cancelled`
 
 ```
-POST /api/v1/brands/{brand_id}/products/
+GET /api/v1/reservations/?status=active
+Authorization: Bearer {access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "resv-001",
+    "campaign": "camp-001",
+    "campaign_name": "Summer Promotion 2026",
+    "brand_name": "Acme Corp",
+    "product_name": "iPhone 15 Pro Max",
+    "kind": "rebate",
+    "offer_type": "premium",
+    "reward_amount": "5.00",
+    "status": "active",
+    "expires_at": "2026-06-12T10:00:00Z",
+    "redeemed_at": null,
+    "created_at": "2026-06-05T10:00:00Z"
+  }
+]
+```
+
+### 72. Create Reservation (Claim Offer)
+
+- **Method / URL:** `POST /api/v1/reservations/`
+- **Auth:** Bearer access token
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/reservations/
 Authorization: Bearer {access_token}
 Content-Type: application/json
 
 {
-  "name": "iPhone 15 Pro Max",
-  "sku": "IPHONE15PM256GB",
-  "category": "Electronics",
-  "description": "Apple iPhone 15 Pro Max 256GB",
-  "base_price": "1199.00"
+  "campaign": "camp-001"
 }
 
-Success (201):
-{
-  "id": "prod-001",
-  "name": "iPhone 15 Pro Max",
-  "sku": "IPHONE15PM256GB",
-  "category": "Electronics",
-  "base_price": "1199.00",
-  "created_at": "2026-06-05T10:00:00Z"
-}
+Success (201): ReservationSerializer with "status": "active"
+
+Errors:
+- 400: Campaign is not currently claimable
+- 400: You are in cooldown for this campaign
+- 400: Campaign daily budget exhausted
+- 400: You already have an active reservation for this campaign
 ```
 
-### 19. Upload Receipt
+**Notes:** Creates a 7-day hold (`expires_at`). Expiry/rejection does not restore
+campaign budget. Depends on an **active** campaign (steps 53–60).
+
+### 73. Get Reservation Detail
+
+- **Method / URL:** `GET /api/v1/reservations/{reservation_id}/`
+- **Auth:** Bearer access token
+
+```
+GET /api/v1/reservations/resv-001/
+Authorization: Bearer {access_token}
+
+Success (200): ReservationSerializer
+
+Errors:
+- 404: Reservation not found
+```
+
+---
+
+## Receipt APIs
+
+> Module tags: `receipts` (consumer) and `review-queue` (brand). Uploading a
+> verified receipt against a reservation triggers reward issuance.
+
+### 74. List My Receipts
+
+- **Method / URL:** `GET /api/v1/receipts/`
+- **Auth:** Bearer access token
+
+```
+GET /api/v1/receipts/
+Authorization: Bearer {access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "receipt-001",
+    "reservation": "resv-001",
+    "campaign": "camp-001",
+    "campaign_name": "Summer Promotion 2026",
+    "brand_name": "Acme Corp",
+    "status": "verified",
+    "merchant": "BestBuy #1234",
+    "purchased_at": "2026-06-04T14:30:00Z",
+    "total": "1199.00",
+    "matched": true,
+    "matched_units": 1,
+    "decision_reason": "",
+    "line_items": [
+      {
+        "id": "li-001",
+        "description": "iPhone 15 Pro Max",
+        "quantity": 1,
+        "unit_price": "1199.00",
+        "matched_product": "prod-001",
+        "matched_product_name": "iPhone 15 Pro Max"
+      }
+    ],
+    "created_at": "2026-06-04T15:00:00Z"
+  }
+]
+```
+
+**Notes:** `status` ∈ `pending`, `verified`, `rejected`.
+
+### 75. Upload Receipt
+
+- **Method / URL:** `POST /api/v1/receipts/`
+- **Auth:** Bearer access token
+- **Headers:** `Authorization: Bearer {access_token}`, `Content-Type: multipart/form-data`
 
 ```
 POST /api/v1/receipts/
 Authorization: Bearer {access_token}
 Content-Type: multipart/form-data
 
-Form Data:
-- image: (file) receipt_image.jpg
-- merchant: "Starbucks #1234"
-- purchased_at: "2026-06-04T14:30:00Z"
-- total: "25.50"
-- line_items: [
-    {
-      "description": "Grande Latte",
-      "quantity": 1,
-      "unit_price": "5.75"
-    },
-    {
-      "description": "Blueberry Muffin",
-      "quantity": 2,
-      "unit_price": "4.50"
-    }
+Form fields:
+- reservation: resv-001          (required, UUID)
+- image: (file) receipt.jpg      (optional)
+- merchant: "BestBuy #1234"       (optional)
+- purchased_at: 2026-06-04T14:30:00Z  (optional, ISO 8601)
+- total: 1199.00                  (optional, decimal)
+- items: [                        (optional; JSON array of line items)
+    { "description": "iPhone 15 Pro Max", "quantity": 1, "unit_price": "1199.00" }
   ]
+
+Success (201): ReceiptSerializer (see step 74)
+
+Errors:
+- 400: reservation is required
+- 400: Reservation already has a receipt / is not active
+- 400: Duplicate receipt (fingerprint match)
+- 413: File too large
+```
+
+**Notes:** `reservation` is **required** and ties the receipt to a claimed offer.
+The OCR seam parses structured `items` (mock in dev). A verified receipt that
+matches the campaign product issues the reward automatically; unmatched receipts
+enter the brand's **review queue** (step 77). Send `items` as JSON; for pure
+JSON testing you may also post `application/json` with the same fields.
+
+### 76. Get Receipt Detail
+
+- **Method / URL:** `GET /api/v1/receipts/{receipt_id}/`
+- **Auth:** Bearer access token
+
+```
+GET /api/v1/receipts/receipt-001/
+Authorization: Bearer {access_token}
+
+Success (200): ReceiptSerializer
+
+Errors:
+- 404: Receipt not found
+```
+
+### 77. Brand Review Queue (list)
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/review-queue/`
+- **Auth:** Bearer access token (member)
+
+```
+GET /api/v1/brands/brand-001/review-queue/
+Authorization: Bearer {access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "rqi-001",
+    "status": "pending",
+    "receipt": { ...ReceiptSerializer... },
+    "created_at": "2026-06-04T15:05:00Z"
+  }
+]
+```
+
+**Notes:** Receipts that couldn't be auto-matched land here for manual review.
+
+### 78. Approve Review Item
+
+- **Method / URL:** `POST /api/v1/brands/{brand_id}/review-queue/{item_id}/approve/`
+- **Auth:** Bearer access token (manager, non-suspended)
+
+```
+POST /api/v1/brands/brand-001/review-queue/rqi-001/approve/
+Authorization: Bearer {access_token}
+
+(no request body)
+
+Success (200): ReceiptSerializer with "status": "verified"
+
+Errors:
+- 400: Item already decided
+- 404: Review item not found
+```
+
+**Notes:** Approving verifies the receipt and triggers reward issuance.
+
+### 79. Decline Review Item
+
+- **Method / URL:** `POST /api/v1/brands/{brand_id}/review-queue/{item_id}/decline/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/brands/brand-001/review-queue/rqi-001/decline/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "reason": "Items do not match campaign product"
+}
+
+Success (200): ReceiptSerializer with "status": "rejected"
+
+Errors:
+- 400: reason is required
+```
+
+### 80. Add Alias from Review Item
+
+- **Method / URL:** `POST /api/v1/brands/{brand_id}/review-queue/{item_id}/add-alias/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/brands/brand-001/review-queue/rqi-001/add-alias/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "line_item": "li-001",
+  "product": "prod-001"
+}
 
 Success (201):
 {
-  "id": "receipt-001",
-  "merchant": "Starbucks #1234",
-  "total_amount": "25.50",
-  "status": "pending_ocr",
-  "line_items": [
-    {
-      "description": "Grande Latte",
-      "quantity": 1,
-      "unit_price": "5.75"
-    }
-  ],
-  "created_at": "2026-06-04T15:00:00Z"
+  "alias_id": "alias-010",
+  "alias_text": "iphone 15 pro max"
 }
 
 Errors:
-- 400: Image required
-- 400: Invalid receipt data
-- 413: File too large (max 10MB)
+- 400: Line item / product does not belong to this brand
+```
+
+**Notes:** Teaches the matcher by creating a product alias from an unmatched line item.
+
+### 81. Flag User (fraud)
+
+- **Method / URL:** `POST /api/v1/brands/{brand_id}/flag-user/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/brands/brand-001/flag-user/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "user": "user-123",
+  "reason": "manual",
+  "detail": "Repeated mismatched receipts"
+}
+
+Success (201):
+{
+  "flag_id": "flag-001"
+}
+
+Errors:
+- 404: User not found
+```
+
+**Notes:** `reason` ∈ `duplicate`, `no_match`, `velocity`, `manual` (default `manual`).
+Visible to admins via the fraud-flags endpoint (step 133).
+
+---
+
+## Redemption APIs
+
+> Module tag: `redemptions`. Read-only history of issued rewards.
+
+### 82. List My Redemptions
+
+- **Method / URL:** `GET /api/v1/redemptions/`
+- **Auth:** Bearer access token
+
+```
+GET /api/v1/redemptions/
+Authorization: Bearer {access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "redemption-001",
+    "reservation": "resv-001",
+    "receipt": "receipt-001",
+    "campaign": "camp-001",
+    "campaign_name": "Summer Promotion 2026",
+    "brand_name": "Acme Corp",
+    "user_email": "buyer@example.com",
+    "reward_amount": "5.00",
+    "fee_amount": "0.35",
+    "status": "issued",
+    "issued_at": "2026-06-04T16:00:00Z",
+    "created_at": "2026-06-04T16:00:00Z"
+  }
+]
+```
+
+### 83. Get Redemption Detail
+
+- **Method / URL:** `GET /api/v1/redemptions/{redemption_id}/`
+- **Auth:** Bearer access token
+
+```
+GET /api/v1/redemptions/redemption-001/
+Authorization: Bearer {access_token}
+
+Success (200): RedemptionSerializer
+
+Errors:
+- 404: Redemption not found
+```
+
+### 84. List Brand Redemptions
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/redemptions/`
+- **Auth:** Bearer access token (member)
+
+```
+GET /api/v1/brands/brand-001/redemptions/
+Authorization: Bearer {access_token}
+
+Success (200): plain array of RedemptionSerializer (tenant-scoped)
 ```
 
 ---
 
-## Reviews
+## Review Campaign APIs
 
-### 20. Create Review Campaign
+> Module tag: `review-campaigns`. AI-powered review campaigns. Brand-scoped: reads
+> need membership, writes need a manager on a non-suspended brand.
+
+### 85. List Review Campaigns
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/review-campaigns/`
+- **Auth:** Bearer access token (member)
 
 ```
-POST /api/v1/brands/{brand_id}/review-campaigns/
+GET /api/v1/brands/brand-001/review-campaigns/
+Authorization: Bearer {access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "rev-camp-001",
+    "name": "Product Feedback Summer 2026",
+    "status": "active",
+    "daily_budget": "100.00",
+    "reward_amount": "1.00",
+    "product_context": "Premium smartphones",
+    "auto_paused": false,
+    "products": [ { "id": "prod-001", "name": "iPhone 15 Pro Max" } ],
+    "prompts": [ { "id": "p-1", "text": "What did you like most?", "order": 0, "source": "ai" } ],
+    "created_at": "2026-06-05T10:00:00Z"
+  }
+]
+```
+
+**Notes:** `status` ∈ `draft`, `active`, `paused`, `completed`, `archived`.
+
+### 86. Create Review Campaign
+
+- **Method / URL:** `POST /api/v1/brands/{brand_id}/review-campaigns/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/brands/brand-001/review-campaigns/
 Authorization: Bearer {access_token}
 Content-Type: application/json
 
 {
   "name": "Product Feedback Summer 2026",
-  "description": "Help us improve with your feedback",
-  "product_ids": ["prod-001", "prod-002", "prod-003"],
-  "rules": {
-    "min_receipt_amount": "10.00",
-    "enabled_for_purchased": true,
-    "cooldown_days": 90,
-    "max_reviews_per_receipt": 5
-  },
+  "daily_budget": "100.00",
   "reward_amount": "1.00",
-  "start_date": "2026-06-01",
-  "end_date": "2026-12-31"
+  "product_context": "Premium smartphones — focus on camera and battery",
+  "product_ids": ["prod-001", "prod-002"]
 }
 
-Success (201):
-{
-  "id": "rev-camp-001",
-  "name": "Product Feedback Summer 2026",
-  "status": "draft",
-  "created_at": "2026-06-05T10:00:00Z"
-}
+Success (201): ReviewCampaignSerializer with "status": "draft"
+
+Errors:
+- 400: name and daily_budget are required
+- 400: daily_budget must be at least 0.01
 ```
 
-### 21. Submit Review
+**Notes:** `reward_amount` is optional (defaults from plan/settings). `product_ids`
+and `product_context` seed AI prompt generation (step 93).
+
+### 87. Get Review Campaign Detail
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/review-campaigns/{campaign_id}/`
+- **Auth:** Bearer access token (member)
 
 ```
-POST /api/v1/reviews/sessions/{session_id}/submit/
+GET /api/v1/brands/brand-001/review-campaigns/rev-camp-001/
+Authorization: Bearer {access_token}
+
+Success (200): ReviewCampaignSerializer
+
+Errors:
+- 404: Review campaign not found
+```
+
+### 88. Update Review Campaign
+
+- **Method / URL:** `PATCH /api/v1/brands/{brand_id}/review-campaigns/{campaign_id}/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+PATCH /api/v1/brands/brand-001/review-campaigns/rev-camp-001/
 Authorization: Bearer {access_token}
 Content-Type: application/json
 
 {
-  "rating": 5,
-  "title": "Excellent product!",
-  "content": "This product exceeded my expectations. Highly recommended!"
+  "name": "Product Feedback (Updated)",
+  "daily_budget": "150.00",
+  "reward_amount": "1.50",
+  "product_context": "Highlight battery life"
 }
+
+Success (200): updated ReviewCampaignSerializer
+```
+
+### 89. Delete (Archive) Review Campaign
+
+- **Method / URL:** `DELETE /api/v1/brands/{brand_id}/review-campaigns/{campaign_id}/`
+- **Auth:** Bearer access token (manager, non-suspended)
+
+```
+DELETE /api/v1/brands/brand-001/review-campaigns/rev-camp-001/
+Authorization: Bearer {access_token}
+
+Success (204): (no content)
+```
+
+### 90. Set Review Campaign Products (replace)
+
+- **Method / URL:** `PUT /api/v1/brands/{brand_id}/review-campaigns/{campaign_id}/products/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+PUT /api/v1/brands/brand-001/review-campaigns/rev-camp-001/products/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "product_ids": ["prod-001", "prod-002", "prod-003"]
+}
+
+Success (200): updated ReviewCampaignSerializer
+
+Errors:
+- 400: product_ids must not be empty
+- 400: One or more products do not belong to this brand
+```
+
+### 91. List Review Campaign Prompts
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/review-campaigns/{campaign_id}/prompts/`
+- **Auth:** Bearer access token (member)
+
+```
+GET /api/v1/brands/brand-001/review-campaigns/rev-camp-001/prompts/
+Authorization: Bearer {access_token}
+
+Success (200): plain array
+[
+  { "id": "p-1", "text": "What did you like most?", "order": 0, "source": "ai" },
+  { "id": "p-2", "text": "How was battery life?", "order": 1, "source": "custom" }
+]
+```
+
+**Notes:** `source` ∈ `ai`, `custom`.
+
+### 92. Add Custom Prompt
+
+- **Method / URL:** `POST /api/v1/brands/{brand_id}/review-campaigns/{campaign_id}/prompts/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/brands/brand-001/review-campaigns/rev-camp-001/prompts/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "text": "Would you recommend this product to a friend?"
+}
+
+Success (201): ReviewPromptSerializer with "source": "custom"
+```
+
+### 93. Generate AI Prompts
+
+- **Method / URL:** `POST /api/v1/brands/{brand_id}/review-campaigns/{campaign_id}/generate-prompts/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/brands/brand-001/review-campaigns/rev-camp-001/generate-prompts/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "count": 4
+}
+
+Success (200): plain array of generated ReviewPromptSerializer (source "ai")
+```
+
+**Notes:** `count` ∈ 1–10 (default 4). Uses the AI seam (deterministic mock when no
+API key; real Claude/OpenAI/Gemini when configured). Uses `product_context` + products.
+
+### 94. Activate Review Campaign
+
+- **Method / URL:** `POST /api/v1/brands/{brand_id}/review-campaigns/{campaign_id}/activate/`
+- **Auth:** Bearer access token (manager, non-suspended)
+
+```
+POST /api/v1/brands/brand-001/review-campaigns/rev-camp-001/activate/
+Authorization: Bearer {access_token}
+
+(no request body)
+
+Success (200): ReviewCampaignSerializer with "status": "active"
+
+Errors:
+- 400: Campaign has no products / prompts
+- 400: Insufficient wallet funding
+```
+
+### 95. Pause Review Campaign
+
+- **Method / URL:** `POST /api/v1/brands/{brand_id}/review-campaigns/{campaign_id}/pause/`
+- **Auth:** Bearer access token (manager, non-suspended)
+
+```
+POST /api/v1/brands/brand-001/review-campaigns/rev-camp-001/pause/
+Authorization: Bearer {access_token}
+
+(no request body)
+
+Success (200): ReviewCampaignSerializer with "status": "paused"
+```
+
+### 96. Preview Review Campaign
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/review-campaigns/{campaign_id}/preview/`
+- **Auth:** Bearer access token (member)
+
+```
+GET /api/v1/brands/brand-001/review-campaigns/rev-camp-001/preview/
+Authorization: Bearer {access_token}
 
 Success (200):
 {
-  "id": "review-001",
-  "session_id": "session-001",
+  "campaign": { ...ReviewCampaignSerializer... },
+  "reward_amount": "1.00",
+  "consumes_budget": false
+}
+```
+
+---
+
+## Review Moderation APIs
+
+> Module tag: `review-moderation`. Brand-side moderation of submitted reviews.
+
+### 97. List Brand Reviews
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/reviews/`
+- **Auth:** Bearer access token (member)
+- **Query params:** `status` (optional) ∈ `published`, `held`, `removed`
+
+```
+GET /api/v1/brands/brand-001/reviews/?status=published
+Authorization: Bearer {access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "review-001",
+    "product": "prod-001",
+    "product_name": "iPhone 15 Pro Max",
+    "user_email": "buyer@example.com",
+    "rating": 5,
+    "content": "Excellent product, highly recommended!",
+    "status": "published",
+    "published_at": "2026-06-04T18:00:00Z",
+    "created_at": "2026-06-04T17:00:00Z"
+  }
+]
+```
+
+### 98. Remove Brand Review
+
+- **Method / URL:** `POST /api/v1/brands/{brand_id}/reviews/{review_id}/remove/`
+- **Auth:** Bearer access token (manager, non-suspended)
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/brands/brand-001/reviews/review-001/remove/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "reason": "Contains off-topic content"
+}
+
+Success (200): ReviewSerializer with "status": "removed"
+
+Errors:
+- 404: Review not found
+```
+
+**Notes:** `reason` is optional. Writes an audit log.
+
+---
+
+## Consumer Review APIs
+
+> Module tag: `reviews`. The consumer side: opportunities, chat sessions,
+> submission, and history.
+
+### 99. List Review Opportunities
+
+- **Method / URL:** `GET /api/v1/reviews/opportunities/`
+- **Auth:** Bearer access token
+
+```
+GET /api/v1/reviews/opportunities/
+Authorization: Bearer {access_token}
+
+Success (200): plain array of active ReviewSession objects
+[
+  {
+    "id": "session-001",
+    "product": "prod-001",
+    "product_name": "iPhone 15 Pro Max",
+    "brand_name": "Acme Corp",
+    "reward_amount": "1.00",
+    "status": "active",
+    "expires_at": "2026-06-12T10:00:00Z",
+    "messages": [],
+    "prompts": ["What did you like most?", "How was battery life?"],
+    "created_at": "2026-06-05T10:00:00Z"
+  }
+]
+```
+
+**Notes:** A review session is created when an eligible receipt is verified. Sessions
+expire in 7 days.
+
+### 100. Get Review Session
+
+- **Method / URL:** `GET /api/v1/reviews/sessions/{session_id}/`
+- **Auth:** Bearer access token
+
+```
+GET /api/v1/reviews/sessions/session-001/
+Authorization: Bearer {access_token}
+
+Success (200): ReviewSessionSerializer (includes the chat `messages` array)
+
+Errors:
+- 404: Review session not found
+```
+
+### 101. Answer in Review Session (chat)
+
+- **Method / URL:** `POST /api/v1/reviews/sessions/{session_id}/answer/`
+- **Auth:** Bearer access token
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/reviews/sessions/session-001/answer/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "text": "The camera quality is amazing and the battery lasts all day."
+}
+
+Success (200): updated chat state, e.g.
+{
+  "messages": [
+    { "role": "user", "text": "The camera quality is amazing..." },
+    { "role": "assistant", "text": "Great! Anything about the design?" }
+  ],
+  "complete": false
+}
+
+Errors:
+- 400: Session expired or already completed
+- 404: Review session not found
+```
+
+**Notes:** Appends a message and returns the AI's follow-up (mock when no API key).
+
+### 102. Submit Review
+
+- **Method / URL:** `POST /api/v1/reviews/sessions/{session_id}/submit/`
+- **Auth:** Bearer access token
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/reviews/sessions/session-001/submit/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
   "rating": 5,
-  "title": "Excellent product!",
-  "status": "submitted",
-  "reward_issued": true,
+  "content": "This product exceeded my expectations. Highly recommended!"
+}
+
+Success (201): ReviewSerializer
+{
+  "id": "review-001",
+  "product": "prod-001",
+  "product_name": "iPhone 15 Pro Max",
+  "user_email": "buyer@example.com",
+  "rating": 5,
+  "content": "This product exceeded my expectations...",
+  "status": "published",
+  "published_at": "2026-06-04T18:00:00Z",
   "created_at": "2026-06-04T17:00:00Z"
 }
 
 Errors:
-- 400: Rating required (1-5)
-- 400: Session expired
-- 403: Not eligible for review
+- 400: rating must be between 1 and 5
+- 400: Session expired or already submitted
+- 404: Review session not found
+```
+
+**Notes:** `content` is optional. Submitting issues the review reward. Reviews of
+1–2★ are **held** for 30 days before publishing; higher ratings publish immediately.
+
+### 103. List My Reviews
+
+- **Method / URL:** `GET /api/v1/reviews/`
+- **Auth:** Bearer access token
+
+```
+GET /api/v1/reviews/
+Authorization: Bearer {access_token}
+
+Success (200): plain array of the caller's ReviewSerializer
 ```
 
 ---
 
-## Admin Operations
+## Payout APIs
 
-### 22. Suspend User
+> Module tags: `payout-methods`, `withdrawals` (consumer) and `admin-payouts` (admin).
+
+### 104. List Payout Methods
+
+- **Method / URL:** `GET /api/v1/payout-methods/`
+- **Auth:** Bearer access token
 
 ```
-POST /api/v1/admin/users/{user_id}/suspend/
+GET /api/v1/payout-methods/
+Authorization: Bearer {access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "pm-001",
+    "provider": "paypal",
+    "handle": "buyer@example.com",
+    "is_default": true,
+    "created_at": "2026-06-05T10:00:00Z"
+  }
+]
+```
+
+### 105. Add Payout Method
+
+- **Method / URL:** `POST /api/v1/payout-methods/`
+- **Auth:** Bearer access token
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/payout-methods/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "provider": "paypal",
+  "handle": "buyer@example.com",
+  "is_default": true
+}
+
+Success (201): PayoutMethodSerializer
+
+Errors:
+- 400: This provider+handle is already registered
+```
+
+**Notes:** `provider` ∈ `paypal`, `venmo`. `handle` is the email/username/phone.
+
+### 106. Delete Payout Method
+
+- **Method / URL:** `DELETE /api/v1/payout-methods/{method_id}/`
+- **Auth:** Bearer access token
+
+```
+DELETE /api/v1/payout-methods/pm-001/
+Authorization: Bearer {access_token}
+
+Success (204): (no content)
+
+Errors:
+- 404: Payout method not found
+- 400: Method has pending withdrawals
+```
+
+### 107. List My Withdrawals
+
+- **Method / URL:** `GET /api/v1/withdrawals/`
+- **Auth:** Bearer access token
+
+```
+GET /api/v1/withdrawals/
+Authorization: Bearer {access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "wd-001",
+    "user_email": "buyer@example.com",
+    "payout_method": "pm-001",
+    "provider": "paypal",
+    "handle": "buyer@example.com",
+    "amount": "50.00",
+    "status": "pending",
+    "admin_note": "",
+    "batch": null,
+    "reviewed_at": null,
+    "paid_at": null,
+    "created_at": "2026-06-05T10:00:00Z"
+  }
+]
+```
+
+**Notes:** `status` ∈ `pending`, `approved`, `processing`, `paid`, `rejected`, `flagged`.
+
+### 108. Request Withdrawal
+
+- **Method / URL:** `POST /api/v1/withdrawals/`
+- **Auth:** Bearer access token
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/withdrawals/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "payout_method": "pm-001",
+  "amount": "50.00"
+}
+
+Success (201): WithdrawalSerializer with "status": "pending"
+
+Errors:
+- 400: Insufficient available balance
+- 400: amount must be at least 0.01
+- 404: Payout method not found
+```
+
+**Notes:** Places a hold on the customer wallet for `amount` until the request is
+paid or rejected.
+
+### 109. Get Withdrawal Detail
+
+- **Method / URL:** `GET /api/v1/withdrawals/{withdrawal_id}/`
+- **Auth:** Bearer access token
+
+```
+GET /api/v1/withdrawals/wd-001/
+Authorization: Bearer {access_token}
+
+Success (200): WithdrawalSerializer
+
+Errors:
+- 404: Withdrawal not found
+```
+
+### 110. List Withdrawals (admin)
+
+- **Method / URL:** `GET /api/v1/admin/withdrawals/`
+- **Auth:** Bearer admin token
+- **Query params:** `status` (optional)
+
+```
+GET /api/v1/admin/withdrawals/?status=pending
+Authorization: Bearer {admin_access_token}
+
+Success (200): plain array of WithdrawalSerializer
+
+Errors:
+- 403: Platform admin access required
+```
+
+### 111. Withdrawal Action (admin)
+
+- **Method / URL:** `POST /api/v1/admin/withdrawals/{withdrawal_id}/{action}/`
+- **Auth:** Bearer admin token
+- **Path params:** `withdrawal_id` (UUID), `action` ∈ `approve`, `reject`, `flag`, `mark-paid`, `note`
+
+```
+POST /api/v1/admin/withdrawals/wd-001/approve/
+Authorization: Bearer {admin_access_token}
+
+(approve / mark-paid: no body required)
+
+--- reject / flag (optional reason) ---
+POST /api/v1/admin/withdrawals/wd-001/reject/
+Content-Type: application/json
+{
+  "reason": "Suspicious activity"
+}
+
+--- note (required note) ---
+POST /api/v1/admin/withdrawals/wd-001/note/
+Content-Type: application/json
+{
+  "note": "Verified ID manually"
+}
+
+Success (200): updated WithdrawalSerializer
+
+Errors:
+- 404: Unknown action
+- 404: Withdrawal not found
+- 400: Invalid state transition
+```
+
+**Notes:** One endpoint multiplexes five admin actions via the `action` path
+segment. `approve` → approved; `mark-paid` → paid (releases the hold as a payout
+debit); `reject`/`flag` accept an optional `reason`; `note` appends an `admin_note`.
+
+### 112. List Payout Batches (admin)
+
+- **Method / URL:** `GET /api/v1/admin/payout-batches/`
+- **Auth:** Bearer admin token
+
+```
+GET /api/v1/admin/payout-batches/
+Authorization: Bearer {admin_access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "batch-001",
+    "status": "created",
+    "total_amount": "150.00",
+    "count": 3,
+    "exported_at": null,
+    "created_at": "2026-06-05T10:00:00Z"
+  }
+]
+```
+
+**Notes:** `status` ∈ `created`, `exported`, `completed`.
+
+### 113. Create Payout Batch (admin)
+
+- **Method / URL:** `POST /api/v1/admin/payout-batches/`
+- **Auth:** Bearer admin token
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/admin/payout-batches/
 Authorization: Bearer {admin_access_token}
 Content-Type: application/json
 
 {
-  "reason": "Suspected fraudulent activity"
+  "withdrawal_ids": ["wd-001", "wd-002"]
 }
+
+Success (201): PayoutBatchSerializer
+
+Errors:
+- 400: No approved withdrawals to batch
+```
+
+**Notes:** `withdrawal_ids` is optional; omit to batch **all** approved withdrawals.
+
+### 114. Export Payout Batch (admin)
+
+- **Method / URL:** `GET /api/v1/admin/payout-batches/{batch_id}/export/`
+- **Auth:** Bearer admin token
+
+```
+GET /api/v1/admin/payout-batches/batch-001/export/
+Authorization: Bearer {admin_access_token}
+
+Success (200): export payload (rows for manual processing), e.g.
+{
+  "batch_id": "batch-001",
+  "status": "exported",
+  "rows": [
+    { "provider": "paypal", "handle": "buyer@example.com", "amount": "50.00" }
+  ]
+}
+
+Errors:
+- 404: Batch not found
+```
+
+**Notes:** Marks the batch `exported`. CSV/manual processing seam (no real payment rail).
+
+---
+
+## Notification APIs
+
+> Module tag: `notifications`. Device tokens, preferences, and the notification feed.
+
+### 115. List Device Tokens
+
+- **Method / URL:** `GET /api/v1/device-tokens/`
+- **Auth:** Bearer access token
+
+```
+GET /api/v1/device-tokens/
+Authorization: Bearer {access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "dt-001",
+    "token": "fcm-device-token-abc123",
+    "platform": "ios",
+    "is_active": true,
+    "created_at": "2026-06-05T10:00:00Z"
+  }
+]
+```
+
+### 116. Register Device Token
+
+- **Method / URL:** `POST /api/v1/device-tokens/`
+- **Auth:** Bearer access token
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/device-tokens/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "token": "fcm-device-token-abc123",
+  "platform": "ios"
+}
+
+Success (201): DeviceTokenSerializer
+```
+
+**Notes:** `platform` ∈ `ios`, `android`, `web` (default `web`). Upserts by token —
+re-registering reactivates and reassigns ownership.
+
+### 117. Delete Device Token
+
+- **Method / URL:** `DELETE /api/v1/device-tokens/{token_id}/`
+- **Auth:** Bearer access token
+
+```
+DELETE /api/v1/device-tokens/dt-001/
+Authorization: Bearer {access_token}
+
+Success (204): (no content)
+
+Errors:
+- 404: Device token not found
+```
+
+### 118. Get Notification Preferences
+
+- **Method / URL:** `GET /api/v1/notification-preferences/`
+- **Auth:** Bearer access token
+
+```
+GET /api/v1/notification-preferences/
+Authorization: Bearer {access_token}
 
 Success (200):
 {
-  "detail": "User suspended."
+  "push_enabled": true,
+  "receipt_reminders": true,
+  "review_reminders": true,
+  "rewards": true,
+  "new_offers": true,
+  "inactivity": true,
+  "promotional": true
 }
 ```
 
-### 23. Issue Promo Credits
+### 119. Update Notification Preferences
+
+- **Method / URL:** `PATCH /api/v1/notification-preferences/`
+- **Auth:** Bearer access token
+- **Headers:** `Content-Type: application/json`
 
 ```
-POST /api/v1/admin/brands/{brand_id}/wallet/credit/
+PATCH /api/v1/notification-preferences/
+Authorization: Bearer {access_token}
+Content-Type: application/json
+
+{
+  "promotional": false,
+  "new_offers": false
+}
+
+Success (200): full preferences object with updated values
+```
+
+**Notes:** `push_enabled` is the master toggle; when false, all push is suppressed.
+
+### 120. List Notifications
+
+- **Method / URL:** `GET /api/v1/notifications/`
+- **Auth:** Bearer access token
+- **Query params:** `unread` (optional) — `1`/`true` to return only unread
+
+```
+GET /api/v1/notifications/?unread=true
+Authorization: Bearer {access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "notif-001",
+    "type": "rewards_waiting",
+    "title": "You have rewards waiting",
+    "body": "Your $5.00 rebate is ready.",
+    "data": { "redemption_id": "redemption-001" },
+    "status": "sent",
+    "read_at": null,
+    "created_at": "2026-06-05T10:00:00Z"
+  }
+]
+```
+
+**Notes:** `type` ∈ `receipt_reminder`, `review_reminder`, `rewards_waiting`,
+`new_offers`, `inactive`, `promotional`.
+
+### 121. Mark All Notifications Read
+
+- **Method / URL:** `POST /api/v1/notifications/read-all/`
+- **Auth:** Bearer access token
+
+```
+POST /api/v1/notifications/read-all/
+Authorization: Bearer {access_token}
+
+(no request body)
+
+Success (200):
+{
+  "marked_read": 7
+}
+```
+
+### 122. Mark Notification Read
+
+- **Method / URL:** `POST /api/v1/notifications/{notification_id}/read/`
+- **Auth:** Bearer access token
+
+```
+POST /api/v1/notifications/notif-001/read/
+Authorization: Bearer {access_token}
+
+(no request body)
+
+Success (200):
+{
+  "detail": "Marked as read."
+}
+
+Errors:
+- 404: Notification not found
+```
+
+---
+
+## Analytics APIs
+
+> Module tags: `analytics` (brand, tenant-scoped) and `admin-analytics` (platform).
+
+### 123. Brand Overview
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/analytics/overview/`
+- **Auth:** Bearer access token (member)
+
+```
+GET /api/v1/brands/brand-001/analytics/overview/
+Authorization: Bearer {access_token}
+
+Success (200):
+{
+  "reservations": 120,
+  "active_reservations": 15,
+  "approvals": 95,
+  "rejected_receipts": 8,
+  "redemptions": 90,
+  "reviews": 40,
+  "published_reviews": 36,
+  "average_rating": "4.40",
+  "spend": {
+    "rebate_reward": "450.00",
+    "rebate_fee": "31.50",
+    "review_reward": "40.00",
+    "review_fee": "40.00",
+    "subscription": "299.00",
+    "total": "860.50"
+  }
+}
+```
+
+### 124. Brand Campaign Analytics
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/analytics/campaigns/`
+- **Auth:** Bearer access token (member)
+
+```
+GET /api/v1/brands/brand-001/analytics/campaigns/
+Authorization: Bearer {access_token}
+
+Success (200): plain array
+[
+  {
+    "campaign_id": "camp-001",
+    "name": "Summer Promotion 2026",
+    "status": "active",
+    "reservations": 60,
+    "active_reservations": 8,
+    "approvals": 50,
+    "rejected_receipts": 3,
+    "redemptions": 48,
+    "reward_spend": "240.00",
+    "fee_spend": "16.80",
+    "total_spend": "256.80"
+  }
+]
+```
+
+### 125. Brand Product Analytics
+
+- **Method / URL:** `GET /api/v1/brands/{brand_id}/analytics/products/`
+- **Auth:** Bearer access token (member)
+
+```
+GET /api/v1/brands/brand-001/analytics/products/
+Authorization: Bearer {access_token}
+
+Success (200): plain array
+[
+  {
+    "product_id": "prod-001",
+    "name": "iPhone 15 Pro Max",
+    "redemptions": 48,
+    "reviews_count": 20,
+    "average_rating": "4.50",
+    "reward_spend": "240.00"
+  }
+]
+```
+
+### 126. Platform Overview (admin)
+
+- **Method / URL:** `GET /api/v1/admin/analytics/overview/`
+- **Auth:** Bearer admin token
+
+```
+GET /api/v1/admin/analytics/overview/
+Authorization: Bearer {admin_access_token}
+
+Success (200):
+{
+  "brands_total": 12,
+  "active_brands": 10,
+  "users_total": 540,
+  "active_users": 480,
+  "new_users": 32,
+  "reservations_total": 1500,
+  "redemptions_total": 1100,
+  "reviews_total": 600,
+  "total_reward_paid": "5400.00",
+  "total_fees": "780.00",
+  "total_payouts": "3200.00"
+}
+
+Errors:
+- 403: Platform admin access required
+```
+
+### 127. Platform Snapshots (admin)
+
+- **Method / URL:** `GET /api/v1/admin/analytics/snapshots/`
+- **Auth:** Bearer admin token
+
+```
+GET /api/v1/admin/analytics/snapshots/
+Authorization: Bearer {admin_access_token}
+
+Success (200): plain array of PlatformStat snapshot rows (idempotent rollups)
+```
+
+**Notes:** Snapshots are produced by the `refresh_analytics` management command.
+
+---
+
+## Admin Panel APIs
+
+> Module tag: `admin`. Platform oversight — **all require an admin token**.
+
+### 128. Issue Promo Credit
+
+- **Method / URL:** `POST /api/v1/admin/brands/{brand_id}/wallet/credit/`
+- **Auth:** Bearer admin token
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/admin/brands/brand-001/wallet/credit/
 Authorization: Bearer {admin_access_token}
 Content-Type: application/json
 
@@ -1245,9 +3774,271 @@ Success (200):
   "ledger_entry_id": "ledger-promo-001",
   "balance_after": "5500.00"
 }
+
+Errors:
+- 400: amount must be at least 0.01
+- 404: Brand not found
 ```
 
-### 24. Send Broadcast Announcement
+**Notes:** Credits the brand's escrow wallet (category `adjustment`). Audit-logged.
+
+### 129. Change Brand Plan
+
+- **Method / URL:** `POST /api/v1/admin/brands/{brand_id}/plan/`
+- **Auth:** Bearer admin token
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/admin/brands/brand-001/plan/
+Authorization: Bearer {admin_access_token}
+Content-Type: application/json
+
+{
+  "plan": "scale"
+}
+
+Success (200):
+{
+  "brand": "brand-001",
+  "plan": "scale"
+}
+
+Errors:
+- 400: Unknown plan slug
+- 404: Brand not found
+```
+
+**Notes:** `plan` is a plan **slug** (`starter`/`pro`/`scale`). Audit-logged.
+
+### 130. List Users (admin)
+
+- **Method / URL:** `GET /api/v1/admin/users/`
+- **Auth:** Bearer admin token
+- **Query params:** `suspended` (`1`/`true`), `flagged` (`1`/`true`) — both optional
+
+```
+GET /api/v1/admin/users/?suspended=false&flagged=true
+Authorization: Bearer {admin_access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "user-001",
+    "email": "buyer@example.com",
+    "full_name": "Jane Buyer",
+    "role": "consumer",
+    "is_active": true,
+    "is_email_verified": true,
+    "created_at": "2026-05-01T10:00:00Z"
+  }
+]
+```
+
+### 131. Suspend User (admin)
+
+- **Method / URL:** `POST /api/v1/admin/users/{user_id}/suspend/`
+- **Auth:** Bearer admin token
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/admin/users/user-001/suspend/
+Authorization: Bearer {admin_access_token}
+Content-Type: application/json
+
+{
+  "reason": "Suspected fraudulent activity"
+}
+
+Success (200):
+{
+  "detail": "User suspended."
+}
+
+Errors:
+- 404: User not found
+```
+
+**Notes:** `reason` is optional. Audit-logged.
+
+### 132. Reactivate User (admin)
+
+- **Method / URL:** `POST /api/v1/admin/users/{user_id}/reactivate/`
+- **Auth:** Bearer admin token
+
+```
+POST /api/v1/admin/users/user-001/reactivate/
+Authorization: Bearer {admin_access_token}
+
+(no request body)
+
+Success (200):
+{
+  "detail": "User reactivated."
+}
+
+Errors:
+- 404: User not found
+```
+
+### 133. List Fraud Flags (admin)
+
+- **Method / URL:** `GET /api/v1/admin/fraud-flags/`
+- **Auth:** Bearer admin token
+- **Query params:** `resolved` (`1`/`true`/`false`) — optional
+
+```
+GET /api/v1/admin/fraud-flags/?resolved=false
+Authorization: Bearer {admin_access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "flag-001",
+    "user": "user-123",
+    "user_email": "suspect@example.com",
+    "brand": "brand-001",
+    "brand_name": "Acme Corp",
+    "reason": "manual",
+    "detail": "Repeated mismatched receipts",
+    "resolved": false,
+    "created_at": "2026-06-05T10:00:00Z"
+  }
+]
+```
+
+### 134. List Campaigns (admin)
+
+- **Method / URL:** `GET /api/v1/admin/campaigns/`
+- **Auth:** Bearer admin token
+- **Query params:** `status` (optional)
+
+```
+GET /api/v1/admin/campaigns/?status=active
+Authorization: Bearer {admin_access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "camp-001",
+    "name": "Summer Promotion 2026",
+    "status": "active",
+    "brand": "brand-001",
+    "brand_name": "Acme Corp",
+    "product_name": "iPhone 15 Pro Max",
+    "daily_budget": "500.00",
+    "auto_paused": false,
+    "created_at": "2026-06-05T10:00:00Z"
+  }
+]
+```
+
+### 135. List Transactions (admin)
+
+- **Method / URL:** `GET /api/v1/admin/transactions/`
+- **Auth:** Bearer admin token
+- **Query params:** `category` (optional) — e.g. `funding`, `rebate_reward`, `payout`
+
+```
+GET /api/v1/admin/transactions/?category=rebate_reward
+Authorization: Bearer {admin_access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "ledger-001",
+    "wallet": "wallet-customer-001",
+    "wallet_kind": "customer",
+    "entry_type": "credit",
+    "amount": "5.00",
+    "category": "rebate_reward",
+    "balance_after": "125.75",
+    "description": "Reward from campaign: Summer Promotion",
+    "created_at": "2026-06-04T16:00:00Z"
+  }
+]
+```
+
+### 136. List Held Reviews (admin)
+
+- **Method / URL:** `GET /api/v1/admin/reviews/held/`
+- **Auth:** Bearer admin token
+
+```
+GET /api/v1/admin/reviews/held/
+Authorization: Bearer {admin_access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "review-050",
+    "product_name": "iPhone 15 Pro Max",
+    "brand_name": "Acme Corp",
+    "rating": 2,
+    "content": "Battery drains quickly.",
+    "status": "held",
+    "created_at": "2026-06-05T10:00:00Z"
+  }
+]
+```
+
+**Notes:** 1–2★ reviews are held for 30 days before publishing (or removal).
+
+### 137. Remove Review (admin)
+
+- **Method / URL:** `POST /api/v1/admin/reviews/{review_id}/remove/`
+- **Auth:** Bearer admin token
+- **Headers:** `Content-Type: application/json`
+
+```
+POST /api/v1/admin/reviews/review-050/remove/
+Authorization: Bearer {admin_access_token}
+Content-Type: application/json
+
+{
+  "reason": "Violates content policy"
+}
+
+Success (200):
+{
+  "detail": "Review removed."
+}
+
+Errors:
+- 404: Review not found
+```
+
+**Notes:** `reason` is optional. Audit-logged.
+
+### 138. List Audit Logs (admin)
+
+- **Method / URL:** `GET /api/v1/admin/audit-logs/`
+- **Auth:** Bearer admin token
+- **Query params:** `target_type`, `actor_id` — both optional
+
+```
+GET /api/v1/admin/audit-logs/?target_type=brand&actor_id=user-admin-001
+Authorization: Bearer {admin_access_token}
+
+Success (200): plain array
+[
+  {
+    "id": "audit-001",
+    "action": "brand.plan_changed",
+    "actor_type": "user",
+    "actor_id": "user-admin-001",
+    "target_type": "brand",
+    "target_id": "brand-001",
+    "metadata": { "from": "pro", "to": "scale" },
+    "created_at": "2026-06-05T10:00:00Z"
+  }
+]
+```
+
+### 139. Send Broadcast Announcement (admin)
+
+- **Method / URL:** `POST /api/v1/admin/announcements/`
+- **Auth:** Bearer admin token
+- **Headers:** `Content-Type: application/json`
 
 ```
 POST /api/v1/admin/announcements/
@@ -1261,50 +4052,36 @@ Content-Type: application/json
 
 Success (200):
 {
-  "recipients_notified": 1250,
-  "created_at": "2026-06-05T10:00:00Z"
+  "recipients": 1250
 }
+
+Errors:
+- 400: title and message are required
 ```
+
+**Notes:** Creates a `promotional` notification for all eligible users (respecting
+their preferences).
 
 ---
 
-## Common Error Responses
 
-All endpoints may return these errors:
+## Status Codes
 
-```
-400 Bad Request:
-{
-  "detail": "Invalid input"
-}
-
-401 Unauthorized:
-{
-  "detail": "Authentication credentials were not provided."
-}
-
-403 Forbidden:
-{
-  "detail": "You do not have permission to perform this action."
-}
-
-404 Not Found:
-{
-  "detail": "Not found."
-}
-
-429 Too Many Requests:
-{
-  "detail": "Request was throttled. Expected available in 50 seconds."
-}
-
-500 Internal Server Error:
-{
-  "detail": "Internal server error"
-}
-```
+| Code | Meaning |
+|------|---------|
+| **200** | OK (success) |
+| **201** | Created (new resource) |
+| **204** | No Content (logout) |
+| **205** | Reset Content (logout) |
+| **400** | Bad Request (validation error) |
+| **401** | Unauthorized (token expired) |
+| **403** | Forbidden (no permission) |
+| **404** | Not Found |
+| **429** | Too Many Requests (rate limited) |
+| **500** | Server Error |
 
 ---
+
 
 # Phase 4: Complete Testing Flow
 
@@ -2997,6 +5774,7 @@ Before deploying to production:
 - [ ] Tests pass: `python manage.py test --settings=core.settings.test`
 - [ ] Schema validates: `python manage.py spectacular --validate`
 - [ ] Deploy check passes: `python manage.py check --deploy --settings=core.settings.prod`
+
 
 ---
 
