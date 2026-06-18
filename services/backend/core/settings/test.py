@@ -16,7 +16,9 @@ SECRET_KEY = "test-secret-key-not-for-production"
 # dedicated test re-enables a tiny rate via override_settings.
 REST_FRAMEWORK = {
     **REST_FRAMEWORK,
-    "DEFAULT_THROTTLE_RATES": {"anon": None, "user": None, "auth": None},
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": None, "user": None, "auth": None, "invite": None,
+    },
 }
 
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"

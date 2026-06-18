@@ -234,4 +234,6 @@ class ReceiptHistoryTests(APITestCase):
         self.client.force_authenticate(other)
         resp = self.client.get(reverse("v1:receipts:receipt-list"))
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(resp.data, [])
+        # Paginated envelope: {count, next, previous, results}
+        self.assertEqual(resp.data["count"], 0)
+        self.assertEqual(resp.data["results"], [])

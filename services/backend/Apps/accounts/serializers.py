@@ -20,6 +20,7 @@ class UserSerializer(serializers.ModelSerializer):
             "email",
             "phone",
             "full_name",
+            "avatar_url",
             "role",
             "is_email_verified",
             "is_phone_verified",
@@ -99,7 +100,7 @@ class VerifyPhoneSerializer(serializers.Serializer):
 class ProfileUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ["full_name"]
+        fields = ["full_name", "avatar_url"]
 
 
 class LogoutSerializer(serializers.Serializer):
@@ -122,3 +123,12 @@ class ReferralOverviewSerializer(serializers.Serializer):
     referral_code = serializers.CharField()
     total_referrals = serializers.IntegerField()
     referrals = ReferralUserSerializer(many=True)
+
+
+class ReferralInviteSerializer(serializers.Serializer):
+    full_name = serializers.CharField(max_length=255, min_length=2)
+    contact = serializers.CharField(max_length=255)
+
+
+class DeleteAccountSerializer(serializers.Serializer):
+    password = serializers.CharField(write_only=True)

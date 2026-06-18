@@ -6,6 +6,8 @@ app_name = "offers"
 
 urlpatterns = [
     path("offers/", views.OfferFeedView.as_view(), name="feed"),
+    path("offers/categories/", views.OfferCategoriesView.as_view(), name="categories"),
+    path("offers/saved/", views.SavedOffersView.as_view(), name="saved"),
     path(
         "offers/by-url/<str:token>/",
         views.OfferByURLView.as_view(),
@@ -20,6 +22,16 @@ urlpatterns = [
         "offers/<uuid:campaign_id>/",
         views.OfferDetailView.as_view(),
         name="detail",
+    ),
+    path(
+        "offers/<uuid:campaign_id>/details/",
+        views.OfferDetailsContentView.as_view(),
+        name="details",
+    ),
+    path(
+        "offers/<uuid:campaign_id>/save/",
+        views.OfferSaveView.as_view(),
+        name="save",
     ),
     path("bookmarks/", views.BookmarkListCreateView.as_view(), name="bookmark-list"),
     path(

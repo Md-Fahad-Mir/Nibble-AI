@@ -35,6 +35,7 @@ user_patterns = [
     path("me/phone/", views.AddPhoneView.as_view(), name="add-phone"),
     path("me/phone/verify/", views.VerifyPhoneView.as_view(), name="verify-phone"),
     path("me/referrals/", views.ReferralView.as_view(), name="referrals"),
+    path("me/referrals/invite/", views.ReferralInviteView.as_view(), name="referral-invite"),
 ]
 
 urlpatterns = [

@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from Apps.common.exceptions import DomainError
+from Apps.common.pagination import paginate, paginated_response_serializer
 from Apps.common.permissions import IsPlatformAdmin
 from Apps.payouts import serializers as s
 from Apps.payouts import services
@@ -70,10 +71,13 @@ class PayoutMethodDeleteView(APIView):
 class WithdrawalListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
-    @extend_schema(responses={200: s.WithdrawalSerializer(many=True)})
+    @extend_schema(
+        operation_id="withdrawals_list",
+        responses={200: paginated_response_serializer(s.WithdrawalSerializer)},
+    )
     def get(self, request):
-        return Response(
-            s.WithdrawalSerializer(withdrawals_for_user(request.user), many=True).data
+        return paginate(
+            self, request, withdrawals_for_user(request.user), s.WithdrawalSerializer
         )
 
     @extend_schema(request=s.RequestWithdrawalSerializer, responses={201: s.WithdrawalSerializer})

@@ -7,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from Apps.common.pagination import paginate, paginated_response_serializer
 from Apps.reservations import serializers as s
 from Apps.reservations import services
 from Apps.reservations.selectors import get_user_reservation, reservations_for_user
@@ -18,14 +19,15 @@ class ReservationListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
+        operation_id="reservations_list",
         parameters=[OpenApiParameter("status", str, description="Filter by status.")],
-        responses={200: s.ReservationSerializer(many=True)},
+        responses={200: paginated_response_serializer(s.ReservationSerializer)},
     )
     def get(self, request):
         reservations = reservations_for_user(
             request.user, status=request.query_params.get("status", "")
         )
-        return Response(s.ReservationSerializer(reservations, many=True).data)
+        return paginate(self, request, reservations, s.ReservationSerializer)
 
     @extend_schema(request=s.CreateReservationSerializer, responses={201: s.ReservationSerializer})
     def post(self, request):

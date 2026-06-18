@@ -226,6 +226,8 @@ REST_FRAMEWORK = {
         "anon": env("THROTTLE_ANON", default="60/min"),
         "user": env("THROTTLE_USER", default="1000/hour"),
         "auth": env("THROTTLE_AUTH", default="10/min"),
+        # Referral invites — abuse/spam control on the friend-invite endpoint.
+        "invite": env("THROTTLE_INVITE", default="20/hour"),
     },
 }
 

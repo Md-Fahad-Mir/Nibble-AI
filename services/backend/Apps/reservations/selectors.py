@@ -18,3 +18,16 @@ def get_user_reservation(user, reservation_id) -> Reservation | None:
         .select_related("campaign", "campaign__brand", "campaign__product")
         .first()
     )
+
+
+def active_reservation_for(user, campaign) -> Reservation | None:
+    """The user's current (still-claimable) reservation for a campaign, if any."""
+    if user is None or not getattr(user, "is_authenticated", False):
+        return None
+    return (
+        Reservation.objects.filter(
+            user=user, campaign=campaign, status=Reservation.Status.ACTIVE
+        )
+        .order_by("-created_at")
+        .first()
+    )

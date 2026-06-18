@@ -48,6 +48,10 @@ def resolve_offer(campaign: Campaign, user=None) -> dict:
     in cooldown, and tiers exist. Otherwise the fallback offer is shown if the
     brand enabled it; else nothing is claimable.
     """
+    # Local imports avoid import cycles (reviews/reservations don't import offers).
+    from Apps.reservations.selectors import active_reservation_for
+    from Apps.reviews.selectors import product_rating_summary
+
     in_cd = is_in_cooldown(user, campaign)
 
     tiers = list(campaign.tiers.all())  # ordered -reward_amount (waterfall)
@@ -69,6 +73,11 @@ def resolve_offer(campaign: Campaign, user=None) -> dict:
 
     restriction = getattr(campaign, "restriction", None)
 
+    # Card credibility (Screens 1, 2, 4) — published-review aggregate.
+    summary = product_rating_summary(campaign.product_id)
+    # Claim state (Screen 2 CTA) — the user's live reservation for this campaign.
+    reservation = active_reservation_for(user, campaign)
+
     return {
         "campaign_id": str(campaign.id),
         "name": campaign.name,
@@ -86,6 +95,10 @@ def resolve_offer(campaign: Campaign, user=None) -> dict:
         "in_cooldown": in_cd,
         "claimable": offer_type is not None,
         "end_at": campaign.end_at,
+        "rating": summary["rating"],
+        "review_count": summary["review_count"],
+        "is_claimed": reservation is not None,
+        "reservation_id": str(reservation.id) if reservation else None,
     }
 
 
@@ -130,3 +143,29 @@ def add_bookmark(*, user, kind: str, product_id=None, brand_id=None) -> Bookmark
 
 def remove_bookmark(bookmark: Bookmark) -> None:
     bookmark.delete()
+
+
+# ---------------------------------------------------------------------------
+# Offer save + consumer details
+# ---------------------------------------------------------------------------
+# Platform-constant explainer shown on consumer offer/campaign pages (Screen 4).
+HOW_IT_WORKS = [
+    {"icon": "gift", "text": "Buy this product at any participating store or online retailer."},
+    {"icon": "upload", "text": "Upload your receipt through NibblAI to verify your purchase."},
+    {"icon": "wallet", "text": "Receive your instant reward directly in your Nibbl wallet."},
+]
+
+
+def save_offer(*, user, campaign: Campaign) -> Bookmark:
+    """'Save My Reward' — offers are dynamic, so we save the underlying product."""
+    return add_bookmark(
+        user=user, kind=Bookmark.Kind.PRODUCT, product_id=campaign.product_id
+    )
+
+
+def build_offer_details(campaign: Campaign, user=None) -> dict:
+    """Consumer campaign-detail content: offer resolution + description + steps."""
+    data = resolve_offer(campaign, user)
+    data["description"] = campaign.description
+    data["how_it_works"] = HOW_IT_WORKS
+    return data

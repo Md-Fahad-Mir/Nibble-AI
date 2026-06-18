@@ -28,4 +28,10 @@ urlpatterns = [
         views.CustomerWalletTransactionsView.as_view(),
         name="customer-wallet-transactions",
     ),
+    path("activity/", views.CustomerActivityView.as_view(), name="customer-activity"),
+    path(
+        "wallet/statement/",
+        views.CustomerStatementView.as_view(),
+        name="customer-statement",
+    ),
 ]

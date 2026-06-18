@@ -314,3 +314,34 @@ def social_login(*, provider: str, token: str) -> dict:
     raise AccountError(
         f"Social login via {provider} is not yet configured on this environment."
     )
+
+
+# ---------------------------------------------------------------------------
+# Referral invites
+# ---------------------------------------------------------------------------
+def send_referral_invite(*, inviter: User, full_name: str, contact: str) -> dict:
+    """Send a referral invite by email. Phone/SMS is gated until Twilio is wired.
+
+    Always reports success without revealing whether the contact is already a
+    registered user (enumeration protection). Blocks self-invites.
+    """
+    contact = contact.strip()
+    is_email = "@" in contact
+
+    if not is_email:
+        # Phone path requires SMS (Twilio), which isn't integrated yet.
+        raise AccountError("Phone invites aren't available yet — use an email address.")
+
+    if contact.lower() == (inviter.email or "").lower():
+        raise AccountError("You can't invite yourself.")
+
+    # Send unless the friend already has an account (don't reveal which).
+    if not User.objects.filter(email__iexact=contact, is_deleted=False).exists():
+        emails.send_referral_invite(
+            to_email=contact,
+            friend_name=full_name.strip(),
+            inviter_name=inviter.full_name or "A friend",
+            referral_code=inviter.referral_code,
+        )
+
+    return {"status": "sent", "channel": "email"}

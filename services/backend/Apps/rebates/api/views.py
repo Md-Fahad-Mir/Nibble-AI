@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from Apps.brands.access import get_brand_or_404, require_membership
+from Apps.common.pagination import paginate, paginated_response_serializer
 from Apps.rebates import serializers as s
 from Apps.rebates.selectors import (
     get_user_redemption,
@@ -19,10 +20,13 @@ from Apps.rebates.selectors import (
 class RedemptionListView(APIView):
     permission_classes = [IsAuthenticated]
 
-    @extend_schema(responses={200: s.RedemptionSerializer(many=True)})
+    @extend_schema(
+        operation_id="redemptions_list",
+        responses={200: paginated_response_serializer(s.RedemptionSerializer)},
+    )
     def get(self, request):
-        return Response(
-            s.RedemptionSerializer(redemptions_for_user(request.user), many=True).data
+        return paginate(
+            self, request, redemptions_for_user(request.user), s.RedemptionSerializer
         )
 
 

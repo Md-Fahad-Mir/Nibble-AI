@@ -145,3 +145,28 @@ class ReviewSerializer(serializers.ModelSerializer):
 
 class RemoveReviewSerializer(serializers.Serializer):
     reason = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class PublicReviewSerializer(serializers.ModelSerializer):
+    """Consumer-safe review (NO email — display name + avatar only)."""
+
+    author_name = serializers.CharField(source="user.full_name", read_only=True)
+    author_avatar = serializers.URLField(source="user.avatar_url", read_only=True)
+
+    class Meta:
+        model = Review
+        fields = [
+            "id",
+            "author_name",
+            "author_avatar",
+            "rating",
+            "content",
+            "published_at",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class ProductReviewSummarySerializer(serializers.Serializer):
+    rating = serializers.FloatField(allow_null=True)
+    review_count = serializers.IntegerField()

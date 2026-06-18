@@ -186,8 +186,15 @@ class MeView(APIView):
         serializer.save()
         return Response(s.UserSerializer(request.user).data)
 
-    @extend_schema(responses={204: None})
+    @extend_schema(request=s.DeleteAccountSerializer, responses={204: None})
     def delete(self, request):
+        # Re-authenticate before an irreversible, destructive action.
+        serializer = s.DeleteAccountSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if not request.user.check_password(serializer.validated_data["password"]):
+            from rest_framework.exceptions import ValidationError
+
+            raise ValidationError({"detail": "Password is incorrect."})
         services.delete_account(request.user)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -241,3 +248,24 @@ class ReferralView(APIView):
             "referrals": referrals,
         }
         return Response(s.ReferralOverviewSerializer(payload).data)
+
+
+@extend_schema(tags=["users"])
+class ReferralInviteView(APIView):
+    """Send a referral invite to a friend by email (phone gated until SMS)."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "invite"
+
+    @extend_schema(request=s.ReferralInviteSerializer, responses={202: None})
+    def post(self, request):
+        serializer = s.ReferralInviteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        result = _run(
+            services.send_referral_invite,
+            inviter=request.user,
+            full_name=serializer.validated_data["full_name"],
+            contact=serializer.validated_data["contact"],
+        )
+        return Response(result, status=status.HTTP_202_ACCEPTED)

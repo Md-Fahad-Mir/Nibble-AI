@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 from Apps.accounts.models import User
 from Apps.brands.access import get_brand_or_404, require_membership
 from Apps.common.exceptions import DomainError
+from Apps.common.pagination import paginate, paginated_response_serializer
 from Apps.receipts import serializers as s
 from Apps.receipts import services
 from Apps.receipts.selectors import (
@@ -36,10 +37,13 @@ def _run(func, *args, **kwargs):
 class ReceiptListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
-    @extend_schema(responses={200: s.ReceiptSerializer(many=True)})
+    @extend_schema(
+        operation_id="receipts_list",
+        responses={200: paginated_response_serializer(s.ReceiptSerializer)},
+    )
     def get(self, request):
-        return Response(
-            s.ReceiptSerializer(receipts_for_user(request.user), many=True).data
+        return paginate(
+            self, request, receipts_for_user(request.user), s.ReceiptSerializer
         )
 
     @extend_schema(request=s.UploadReceiptSerializer, responses={201: s.ReceiptSerializer})

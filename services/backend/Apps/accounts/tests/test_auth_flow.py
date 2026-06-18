@@ -269,12 +269,27 @@ class AccountDeletionTests(APITestCase):
             email="ada@example.com", password="x", full_name="Ada"
         )
         self.client.force_authenticate(user)
-        resp = self.client.delete(reverse("v1:accounts:users:me"))
+        # Re-authentication (current password) is now required.
+        resp = self.client.delete(
+            reverse("v1:accounts:users:me"), {"password": "x"}, format="json"
+        )
         self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
         user.refresh_from_db()
         self.assertTrue(user.is_deleted)
         self.assertFalse(user.is_active)
         self.assertNotEqual(user.email, "ada@example.com")
+
+    def test_delete_account_rejects_wrong_password(self):
+        user = User.objects.create_user(
+            email="ada@example.com", password="RightPass123!", full_name="Ada"
+        )
+        self.client.force_authenticate(user)
+        resp = self.client.delete(
+            reverse("v1:accounts:users:me"), {"password": "wrong"}, format="json"
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        user.refresh_from_db()
+        self.assertFalse(user.is_deleted)
 
 
 class ReferralTests(APITestCase):

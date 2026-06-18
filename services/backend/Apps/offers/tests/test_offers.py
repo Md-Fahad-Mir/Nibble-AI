@@ -182,7 +182,9 @@ class BookmarkTests(APITestCase):
         self.assertEqual(r1.status_code, status.HTTP_201_CREATED)
         self.assertEqual(r2.status_code, status.HTTP_201_CREATED)
         listing = self.client.get(reverse("v1:offers:bookmark-list"))
-        self.assertEqual(len(listing.data), 2)
+        # Paginated envelope: {count, next, previous, results}
+        self.assertEqual(listing.data["count"], 2)
+        self.assertEqual(len(listing.data["results"]), 2)
 
     def test_bookmark_is_deduplicated(self):
         for _ in range(2):

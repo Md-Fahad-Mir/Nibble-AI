@@ -1,5 +1,6 @@
 """Operational endpoints that are not tied to any business domain."""
 
+from django.conf import settings
 from django.db import connection
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
@@ -41,3 +42,21 @@ class HealthCheckView(APIView):
         }
         http_status = status.HTTP_200_OK if db_ok else status.HTTP_503_SERVICE_UNAVAILABLE
         return Response(payload, status=http_status)
+
+
+class PublicConfigView(APIView):
+    """Public, client-readable platform tunables (so copy isn't hardcoded)."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    @extend_schema(summary="Public config", responses={200: None}, tags=["ops"])
+    def get(self, request):
+        return Response(
+            {
+                "claim_window_days": settings.RESERVATION_EXPIRY_DAYS,
+                "review_reward_amount": str(settings.REVIEW_REWARD_AMOUNT),
+                "referral_bonus_amount": str(settings.REFERRAL_BONUS_AMOUNT),
+                "payout_min_amount": str(settings.PAYOUT_MIN_AMOUNT),
+            }
+        )

@@ -22,11 +22,43 @@ class OfferSerializer(serializers.Serializer):
     in_cooldown = serializers.BooleanField()
     claimable = serializers.BooleanField()
     end_at = serializers.DateTimeField(allow_null=True)
+    # Card credibility + claim state (added for Phase-1 website screens).
+    rating = serializers.FloatField(allow_null=True)
+    review_count = serializers.IntegerField()
+    is_claimed = serializers.BooleanField()
+    reservation_id = serializers.UUIDField(allow_null=True)
 
     def to_representation(self, campaign):
         from Apps.offers.services import resolve_offer
 
         return resolve_offer(campaign, self.context.get("user"))
+
+
+class OfferDetailSerializer(OfferSerializer):
+    """Consumer campaign-detail page: offer + description + how-it-works."""
+
+    description = serializers.CharField(allow_blank=True)
+    how_it_works = serializers.ListField(child=serializers.DictField())
+
+    def to_representation(self, instance):
+        # `instance` is the dict from services.build_offer_details (already shaped).
+        return instance
+
+
+class CategorySerializer(serializers.Serializer):
+    category = serializers.CharField()
+
+
+class SavedOfferSerializer(OfferSerializer):
+    """A saved-offer card: full offer payload + the originating bookmark id."""
+
+    bookmark_id = serializers.UUIDField()
+    # Null until the "% OFF" badge product decision lands (key kept for FE).
+    discount_label = serializers.CharField(allow_null=True)
+
+    def to_representation(self, instance):
+        # `instance` is the dict from selectors.saved_offers_for_user.
+        return instance
 
 
 class BookmarkSerializer(serializers.ModelSerializer):

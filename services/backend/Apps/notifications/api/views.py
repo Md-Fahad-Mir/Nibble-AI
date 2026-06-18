@@ -85,6 +85,18 @@ class NotificationListView(APIView):
 
 
 @extend_schema(tags=["notifications"])
+class NotificationUnreadCountView(APIView):
+    """Cheap unread count for the navbar bell badge."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=None, responses={200: None})
+    def get(self, request):
+        count = request.user.notifications.filter(read_at__isnull=True).count()
+        return Response({"unread_count": count})
+
+
+@extend_schema(tags=["notifications"])
 class NotificationReadView(APIView):
     permission_classes = [IsAuthenticated]
 

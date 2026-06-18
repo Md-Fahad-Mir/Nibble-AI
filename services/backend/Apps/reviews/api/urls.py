@@ -25,4 +25,15 @@ urlpatterns = [
     path("reviews/sessions/<uuid:session_id>/answer/", views.ReviewSessionAnswerView.as_view(), name="session-answer"),
     path("reviews/sessions/<uuid:session_id>/submit/", views.ReviewSessionSubmitView.as_view(), name="session-submit"),
     path("reviews/", views.MyReviewsView.as_view(), name="my-reviews"),
+    # Public product reviews + aggregate (consumer Screen 4)
+    path(
+        "products/<uuid:product_id>/reviews/",
+        views.ProductReviewsView.as_view(),
+        name="product-reviews",
+    ),
+    path(
+        "products/<uuid:product_id>/review-summary/",
+        views.ProductReviewSummaryView.as_view(),
+        name="product-review-summary",
+    ),
 ]

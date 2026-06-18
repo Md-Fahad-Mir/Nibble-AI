@@ -9,10 +9,11 @@ from rest_framework.views import APIView
 
 from Apps.brands.models import Brand
 from Apps.brands.selectors import get_active_membership
+from Apps.common.pagination import paginate, paginated_response_serializer
 from Apps.wallets import serializers as s
 from Apps.wallets import services
 from Apps.wallets.models import LedgerEntry
-from Apps.wallets.selectors import ledger_for_wallet
+from Apps.wallets.selectors import customer_statement, ledger_for_wallet
 
 
 def _brand_or_404(brand_id) -> Brand:
@@ -110,3 +111,30 @@ class CustomerWalletTransactionsView(generics.ListAPIView):
     def get_queryset(self):
         wallet = services.get_or_create_customer_wallet(self.request.user)
         return ledger_for_wallet(wallet)
+
+
+@extend_schema(tags=["wallets"])
+class CustomerActivityView(generics.ListAPIView):
+    """Normalized customer activity feed (Rewards Hub) — the money trail."""
+
+    serializer_class = s.ActivitySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        wallet = services.get_or_create_customer_wallet(self.request.user)
+        return ledger_for_wallet(wallet)
+
+
+@extend_schema(tags=["wallets"])
+class CustomerStatementView(APIView):
+    """Merged statement: completed ledger entries + open (pending) withdrawals."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        operation_id="wallet_statement",
+        responses={200: paginated_response_serializer(s.StatementItemSerializer)},
+    )
+    def get(self, request):
+        items = customer_statement(request.user)
+        return paginate(self, request, items, s.StatementItemSerializer)

@@ -196,7 +196,9 @@ class ReservationApiTests(APITestCase):
         self.client.force_authenticate(user)
 
         listing = self.client.get(reverse("v1:reservations:reservation-list"))
-        self.assertEqual(len(listing.data), 1)
+        # Paginated envelope: {count, next, previous, results}
+        self.assertEqual(listing.data["count"], 1)
+        self.assertEqual(len(listing.data["results"]), 1)
 
         detail = self.client.get(
             reverse("v1:reservations:reservation-detail", args=[reservation.id])

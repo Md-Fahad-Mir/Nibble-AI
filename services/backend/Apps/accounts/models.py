@@ -36,6 +36,7 @@ class User(UUIDModel, AbstractBaseUser, PermissionsMixin):
     email = models.EmailField(unique=True)
     phone = models.CharField(max_length=20, unique=True, null=True, blank=True)
     full_name = models.CharField(max_length=255)
+    avatar_url = models.URLField(blank=True)
 
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.CONSUMER)
 

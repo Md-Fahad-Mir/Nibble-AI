@@ -213,4 +213,6 @@ class AdminApiTests(APITestCase):
         other = User.objects.create_user(email="other@example.com", password="x", full_name="O")
         self.client.force_authenticate(other)
         resp = self.client.get(reverse("v1:payouts:withdrawal-list"))
-        self.assertEqual(resp.data, [])
+        # Paginated envelope: {count, next, previous, results}
+        self.assertEqual(resp.data["count"], 0)
+        self.assertEqual(resp.data["results"], [])

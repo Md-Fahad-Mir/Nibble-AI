@@ -8,10 +8,15 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from Apps.campaigns.models import Campaign, CampaignURL, QRCode
+from Apps.common.pagination import paginate, paginated_response_serializer
 from Apps.offers import serializers as s
 from Apps.offers import services
 from Apps.offers.models import OfferView
-from Apps.offers.selectors import active_offers, bookmarks_for_user
+from Apps.offers.selectors import (
+    active_offers,
+    bookmarks_for_user,
+    saved_offers_for_user,
+)
 from Apps.offers.services import OfferError
 
 
@@ -81,6 +86,61 @@ class OfferDetailView(APIView):
 
 
 @extend_schema(tags=["offers"])
+class OfferDetailsContentView(APIView):
+    """Consumer campaign-detail page (description + how-it-works + rating)."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: s.OfferDetailSerializer})
+    def get(self, request, campaign_id):
+        campaign = _live_campaign_with_relations(id=campaign_id)
+        if campaign is None:
+            raise NotFound("Offer not found.")
+        services.record_view(
+            user=request.user, campaign=campaign, source=OfferView.Source.DETAIL
+        )
+        data = services.build_offer_details(campaign, request.user)
+        return Response(s.OfferDetailSerializer(data).data)
+
+
+@extend_schema(tags=["offers"])
+class OfferCategoriesView(APIView):
+    """Distinct product categories present in the active offer feed."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: s.CategorySerializer(many=True)})
+    def get(self, request):
+        cats = sorted(
+            {
+                c
+                for c in active_offers().values_list(
+                    "product__category", flat=True
+                )
+                if c
+            }
+        )
+        return Response([{"category": c} for c in cats])
+
+
+@extend_schema(tags=["offers"])
+class OfferSaveView(APIView):
+    """'Save My Reward' — saves the offer's product to the user's bookmarks."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=None, responses={201: s.BookmarkSerializer})
+    def post(self, request, campaign_id):
+        campaign = _live_campaign_with_relations(id=campaign_id)
+        if campaign is None:
+            raise NotFound("Offer not found.")
+        bookmark = _run(services.save_offer, user=request.user, campaign=campaign)
+        return Response(
+            s.BookmarkSerializer(bookmark).data, status=status.HTTP_201_CREATED
+        )
+
+
+@extend_schema(tags=["offers"])
 class OfferByURLView(APIView):
     """Public entry point: resolve a campaign URL token to its best offer."""
 
@@ -118,14 +178,33 @@ class OfferByQRView(APIView):
         return Response(s.OfferSerializer(campaign, context={"user": user}).data)
 
 
+@extend_schema(tags=["offers"])
+class SavedOffersView(APIView):
+    """Saved-offer cards (Profile → Saved): bookmarked products' active offers."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        operation_id="offers_saved",
+        responses={200: paginated_response_serializer(s.SavedOfferSerializer)},
+    )
+    def get(self, request):
+        return paginate(
+            self, request, saved_offers_for_user(request.user), s.SavedOfferSerializer
+        )
+
+
 @extend_schema(tags=["bookmarks"])
 class BookmarkListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
-    @extend_schema(responses={200: s.BookmarkSerializer(many=True)})
+    @extend_schema(
+        operation_id="bookmarks_list",
+        responses={200: paginated_response_serializer(s.BookmarkSerializer)},
+    )
     def get(self, request):
-        return Response(
-            s.BookmarkSerializer(bookmarks_for_user(request.user), many=True).data
+        return paginate(
+            self, request, bookmarks_for_user(request.user), s.BookmarkSerializer
         )
 
     @extend_schema(request=s.AddBookmarkSerializer, responses={201: s.BookmarkSerializer})

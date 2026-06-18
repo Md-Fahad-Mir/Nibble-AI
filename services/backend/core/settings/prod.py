@@ -1,18 +1,77 @@
 """Production settings.
 
 Everything sensitive is required from the environment (no insecure defaults).
+Tuned to run inside a container behind a TLS-terminating reverse proxy / load
+balancer (nginx, ALB, Cloudflare, etc.).
 """
 
 from .base import *  # noqa: F401,F403
+from .base import ALLOWED_HOSTS, MIDDLEWARE, env
 
 DEBUG = False
 
+# ---------------------------------------------------------------------------
+# Allowed hosts
+# ---------------------------------------------------------------------------
+# Keep loopback reachable so the container's own HEALTHCHECK (which hits the
+# app on 127.0.0.1) is not rejected by Django's Host-header validation, even
+# when operators set ALLOWED_HOSTS to only their public domain.
+ALLOWED_HOSTS = list(dict.fromkeys([*ALLOWED_HOSTS, "127.0.0.1", "localhost"]))
+
+# Origins trusted for CSRF on unsafe methods (Django admin login over HTTPS,
+# etc.). Comma-separated, full scheme+host: "https://api.nibblai.app".
+CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
+
+# ---------------------------------------------------------------------------
 # Security hardening — relies on TLS termination in front of the app.
-SECURE_SSL_REDIRECT = True
+# ---------------------------------------------------------------------------
+# Trust the proxy's X-Forwarded-Proto header to know the original scheme.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# Redirect HTTP→HTTPS at the app. Disable (SECURE_SSL_REDIRECT=False) only when
+# an upstream proxy already forces HTTPS, to avoid redirect loops.
+SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=True)
+# Never redirect the health endpoint: orchestrators/LBs probe it over plain
+# HTTP and must receive 200, not a 301 to HTTPS.
+SECURE_REDIRECT_EXEMPT = [r"^api/v1/health/?$"]
+
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
-SECURE_HSTS_SECONDS = 60 * 60 * 24 * 30  # 30 days
+SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=60 * 60 * 24 * 30)  # 30 days
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
-SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_CONTENT_TYPE_NOSNIFF = True
+
+# ---------------------------------------------------------------------------
+# Static files — served by WhiteNoise from inside the app process.
+# ---------------------------------------------------------------------------
+# WhiteNoise sits immediately after SecurityMiddleware so it can serve the
+# hashed, compressed static assets (admin + drf-spectacular UI) without a
+# separate web server or S3 bucket.
+MIDDLEWARE = list(MIDDLEWARE)
+MIDDLEWARE.insert(
+    MIDDLEWARE.index("django.middleware.security.SecurityMiddleware") + 1,
+    "whitenoise.middleware.WhiteNoiseMiddleware",
+)
+
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Cache — Redis (shared across gunicorn workers).
+# ---------------------------------------------------------------------------
+# DRF throttling counters live in the cache. With multiple gunicorn workers the
+# per-process LocMemCache would let each worker keep its own counters, silently
+# multiplying every rate limit by the worker count. A shared Redis fixes that.
+REDIS_URL = env("REDIS_URL", default="")
+if REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+        }
+    }

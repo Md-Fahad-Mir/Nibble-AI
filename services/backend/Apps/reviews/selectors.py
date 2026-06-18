@@ -1,10 +1,33 @@
 """Read-side queries for the reviews module."""
 
+from django.db.models import Avg, Count
+
 from Apps.reviews.models import (
     Review,
     ReviewCampaign,
     ReviewSession,
 )
+
+
+def product_rating_summary(product_id) -> dict:
+    """Average rating + count of *published* reviews for a product."""
+    agg = Review.objects.filter(
+        product_id=product_id, status=Review.Status.PUBLISHED
+    ).aggregate(avg=Avg("rating"), count=Count("id"))
+    avg = agg["avg"]
+    return {
+        "rating": round(float(avg), 2) if avg is not None else None,
+        "review_count": agg["count"] or 0,
+    }
+
+
+def published_reviews_for_product(product_id):
+    """Public, published reviews for a product (newest first)."""
+    return (
+        Review.objects.filter(product_id=product_id, status=Review.Status.PUBLISHED)
+        .select_related("user", "product")
+        .order_by("-published_at", "-created_at")
+    )
 
 
 def review_campaigns_for_brand(brand):

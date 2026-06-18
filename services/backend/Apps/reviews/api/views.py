@@ -9,6 +9,7 @@ from rest_framework.views import APIView
 
 from Apps.brands.access import get_brand_or_404, require_membership
 from Apps.common.exceptions import DomainError
+from Apps.common.pagination import paginate, paginated_response_serializer
 from Apps.reviews import serializers as s
 from Apps.reviews import services
 from Apps.reviews.selectors import (
@@ -16,6 +17,8 @@ from Apps.reviews.selectors import (
     get_brand_review,
     get_brand_review_campaign,
     get_user_session,
+    product_rating_summary,
+    published_reviews_for_product,
     review_campaigns_for_brand,
     reviews_for_brand,
     reviews_for_user,
@@ -283,3 +286,32 @@ class MyReviewsView(APIView):
     @extend_schema(responses={200: s.ReviewSerializer(many=True)})
     def get(self, request):
         return Response(s.ReviewSerializer(reviews_for_user(request.user), many=True).data)
+
+
+@extend_schema(tags=["reviews"])
+class ProductReviewsView(APIView):
+    """Public, paginated published reviews for a product (Screen 4 Top Reviews)."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: paginated_response_serializer(s.PublicReviewSerializer)})
+    def get(self, request, product_id):
+        return paginate(
+            self,
+            request,
+            published_reviews_for_product(product_id),
+            s.PublicReviewSerializer,
+        )
+
+
+@extend_schema(tags=["reviews"])
+class ProductReviewSummaryView(APIView):
+    """Aggregate rating + count for a product (also embedded in offers)."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: s.ProductReviewSummarySerializer})
+    def get(self, request, product_id):
+        return Response(
+            s.ProductReviewSummarySerializer(product_rating_summary(product_id)).data
+        )

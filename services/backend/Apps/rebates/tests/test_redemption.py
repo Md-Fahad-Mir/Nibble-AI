@@ -97,7 +97,9 @@ class HappyPathTests(APITestCase):
         self.client.force_authenticate(user)
         listing = self.client.get(reverse("v1:rebates:redemption-list"))
         self.assertEqual(listing.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(listing.data), 1)
+        # Paginated envelope: {count, next, previous, results}
+        self.assertEqual(listing.data["count"], 1)
+        self.assertEqual(len(listing.data["results"]), 1)
 
         # Brand history (tenant-scoped).
         self.client.force_authenticate(owner)
