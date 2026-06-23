@@ -67,14 +67,22 @@ MIDDLEWARE.insert(
     "whitenoise.middleware.WhiteNoiseMiddleware",
 )
 
-STORAGES = {
-    "default": {
+# Media (uploaded files). Defaults to local disk (the media_data volume).
+# Flip USE_S3_MEDIA=True to use S3 — requires django-storages + boto3 in the
+# image AND the EC2 role granted s3:PutObject on the media bucket.
+if env.bool("USE_S3_MEDIA", default=False):
+    _default_storage = {
         "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
         "OPTIONS": {
             "bucket_name": env("AWS_STORAGE_BUCKET_NAME", default="nibblai-media-prod"),
             "region_name": env("AWS_REGION", default="us-west-1"),
         },
-    },
+    }
+else:
+    _default_storage = {"BACKEND": "django.core.files.storage.FileSystemStorage"}
+
+STORAGES = {
+    "default": _default_storage,
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
