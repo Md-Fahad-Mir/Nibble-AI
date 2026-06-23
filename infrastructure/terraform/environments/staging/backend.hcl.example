@@ -1,0 +1,7 @@
+# Copy to backend.hcl, set the bucket to the one bootstrap created, then:
+#   terraform init -backend-config=backend.hcl
+bucket         = "nibblai-tfstate-CHANGEME1234"
+key            = "staging/terraform.tfstate"
+region         = "us-west-1"
+dynamodb_table = "nibblai-tflock"
+encrypt        = true

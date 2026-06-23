@@ -1,0 +1,30 @@
+---
+# ─── Role: certbot ────────────────────────────────────────────────────
+# Installs Certbot and provisions SSL certs for all Nibbl AI subdomains.
+
+- name: Install Certbot and Nginx plugin
+  apt:
+    name:
+      - certbot
+      - python3-certbot-nginx
+    state: present
+    update_cache: yes
+
+- name: Obtain SSL certificate for the API subdomain
+  # Only api.<domain> is deployed today; add the apex / other subdomains
+  # (-d {{ website_domain }} ...) here as those services go live.
+  command: >
+    certbot --nginx
+    -d api.{{ website_domain }}
+    --non-interactive
+    --agree-tos
+    -m {{ certbot_email }}
+    --expand
+  register: certbot_result
+  changed_when: "'Certificate not yet due for renewal' not in certbot_result.stdout"
+
+- name: Ensure certbot auto-renewal timer is enabled
+  service:
+    name: certbot.timer
+    state: started
+    enabled: yes

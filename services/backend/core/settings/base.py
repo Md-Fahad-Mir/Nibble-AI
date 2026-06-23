@@ -100,6 +100,12 @@ GOOGLE_AI_API_KEY = env("GOOGLE_AI_API_KEY", default="")
 GOOGLE_STUDIO_API_KEY = env("GOOGLE_STUDIO_API_KEY", default="")
 GOOGLE_MODEL = env("GOOGLE_MODEL", default="gemini-1.5-pro")
 
+# Internal receipt-OCR microservice (services/ai, FastAPI + Tesseract). On the
+# compose network this is http://ai:8001. Empty -> run_ocr uses the deterministic
+# mock. run_ocr also falls back to the mock if the service is unreachable.
+AI_SERVICE_URL = env("AI_SERVICE_URL", default="")
+AI_OCR_TIMEOUT = env.float("AI_OCR_TIMEOUT", default=30.0)
+
 
 # Payouts: minimum customer withdrawal amount.
 PAYOUT_MIN_AMOUNT = env("PAYOUT_MIN_AMOUNT", default="1.00")
@@ -146,21 +152,21 @@ ASGI_APPLICATION = "core.asgi.application"
 
 
 # ---------------------------------------------------------------------------
-# Database (PostgreSQL)
+# Database
 # ---------------------------------------------------------------------------
-# DATABASE_URL takes precedence; otherwise assemble from discrete DB_* vars.
-DATABASES = {
-    "default": env.db_url(
-        "DATABASE_URL",
-        default="postgres://{user}:{password}@{host}:{port}/{name}".format(
-            user=env("DB_USER", default="nibblai"),
-            password=env("DB_PASSWORD", default="nibblai"),
-            host=env("DB_HOST", default="127.0.0.1"),
-            port=env("DB_PORT", default="5432"),
-            name=env("DB_NAME", default="nibblai"),
-        ),
-    )
-}
+# Local development defaults to SQLite (zero-config: a db.sqlite3 file in the
+# project root). Production points DATABASE_URL at AWS RDS PostgreSQL, which
+# always takes precedence here; prod.py additionally *requires* it and tunes
+# connection pooling. Test settings force an isolated in-memory SQLite DB.
+if env("DATABASE_URL", default=""):
+    DATABASES = {"default": env.db_url("DATABASE_URL")}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
 
 
 # ---------------------------------------------------------------------------

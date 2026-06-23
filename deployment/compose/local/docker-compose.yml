@@ -1,0 +1,28 @@
+# ─── Local Development Compose ────────────────────────────────────────
+# Usage: docker compose -f ../docker-compose.base.yml -f docker-compose.yml up
+#
+# Builds from source with hot-reload volumes mounted.
+
+services:
+
+  backend:
+    build:
+      context: ../../services/backend
+      dockerfile: Dockerfile
+      # Hot-reloading dev image (Django runserver), not the gunicorn prod stage.
+      target: dev
+    env_file:
+      - ../environments/.env.local.backend
+    volumes:
+      # Live source for autoreload...
+      - ../../services/backend:/app
+      # ...but keep the image's installed virtualenv: this anonymous volume
+      # shadows the bind-mount at /app/.venv so the host dir can't hide Django.
+      - /app/.venv
+    environment:
+      DEBUG: "True"
+
+  ai:
+    build:
+      context: ../../services/ai
+      dockerfile: Dockerfile

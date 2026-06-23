@@ -5,6 +5,15 @@ from .base import REST_FRAMEWORK
 
 DEBUG = False
 
+# Always use an isolated in-memory SQLite database for the test suite — never
+# touch a real database, even if DATABASE_URL is exported in the environment.
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": ":memory:",
+    }
+}
+
 # Speed up the test suite (no need for slow password hashing).
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 

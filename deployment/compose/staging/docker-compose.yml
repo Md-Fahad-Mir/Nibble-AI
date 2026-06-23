@@ -1,0 +1,11 @@
+# ─── Staging Compose ──────────────────────────────────────────────────
+# Usage: docker compose -f ../docker-compose.base.yml -f docker-compose.yml up -d
+#
+# Uses staging-tagged images. Mirrors production but with staging env.
+
+services:
+
+  backend:
+    image: ${REGISTRY}/nibblai-backend:staging
+    env_file:
+      - ../environments/.env.staging.backend

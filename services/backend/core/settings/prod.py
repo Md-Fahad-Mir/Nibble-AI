@@ -11,6 +11,19 @@ from .base import ALLOWED_HOSTS, MIDDLEWARE, env
 DEBUG = False
 
 # ---------------------------------------------------------------------------
+# Database — AWS RDS PostgreSQL (required; no SQLite fallback in production).
+# ---------------------------------------------------------------------------
+# Set DATABASE_URL to the RDS endpoint; enforce TLS with ?sslmode=require, e.g.
+#   postgres://USER:PASS@nibblai.abc123.us-east-1.rds.amazonaws.com:5432/nibblai?sslmode=require
+# env.db_url() raises ImproperlyConfigured if DATABASE_URL is unset, so prod
+# refuses to start without a real database.
+DATABASES = {"default": env.db_url("DATABASE_URL")}
+# Persistent connections (RDS round-trips are costly); health-check a pooled
+# connection before reuse so a recycled RDS connection can't serve a request.
+DATABASES["default"]["CONN_MAX_AGE"] = env.int("DB_CONN_MAX_AGE", default=60)
+DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
+
+# ---------------------------------------------------------------------------
 # Allowed hosts
 # ---------------------------------------------------------------------------
 # Keep loopback reachable so the container's own HEALTHCHECK (which hits the

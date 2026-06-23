@@ -1,10 +1,10 @@
 # ==============================================================================
-# Nibble AI — Unified Root .gitignore (Enterprise Production Ready)
+# Nibbl AI — Unified Root .gitignore (Enterprise Production Ready)
 # ==============================================================================
 
 # ─── 1. Environment Secrets & Private Credentials ─────────────────────────────
 .env
-# .env.*
+.env.*
 *.env
 .env.local
 .env.development
@@ -83,7 +83,6 @@ celerybeat-schedule
 celerybeat.pid
 *.mo
 *.pot
-.ruff_cache/
 
 # Django specific
 db.sqlite3
@@ -91,9 +90,6 @@ db.sqlite3-journal
 **/media/
 **/staticfiles/
 **/static_root/
-*.log
-
-**/CONSUMER_API_HANDOVER.md
 
 # AI Reports & outputs
 **/reports/
@@ -127,6 +123,7 @@ override.tf.json
 .terraform.lock.hcl
 .terraformrc
 terraform.rc
+backend.hcl
 
 # ─── 7. Ansible ───────────────────────────────────────────────────────────────
 *.retry
@@ -160,4 +157,5 @@ desktop.ini
 temp/
 tmp/
 
+AWS Credentials
 

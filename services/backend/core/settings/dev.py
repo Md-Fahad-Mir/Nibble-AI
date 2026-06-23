@@ -7,6 +7,10 @@ DEBUG = True
 
 ALLOWED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0"]
 
+# Database: inherits the SQLite default from base.py — local development uses a
+# db.sqlite3 file in the project root, no server required. Export DATABASE_URL
+# if you ever want to point local dev at Postgres instead.
+
 # Convenience: the browsable API for poking at endpoints during development.
 REST_FRAMEWORK["DEFAULT_RENDERER_CLASSES"] = [
     "rest_framework.renderers.JSONRenderer",

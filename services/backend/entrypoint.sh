@@ -27,6 +27,9 @@ export DJANGO_SETTINGS_MODULE="${DJANGO_SETTINGS_MODULE:-core.settings.prod}"
 : "${WAIT_FOR_REDIS:=1}"
 : "${RUN_MIGRATIONS:=1}"
 : "${RUN_COLLECTSTATIC:=0}"
+# Bootstrap a superuser from DJANGO_SUPERUSER_* env vars (idempotent; the
+# command no-ops if email/password are unset). Set CREATE_SUPERUSER=0 to skip.
+: "${CREATE_SUPERUSER:=1}"
 
 : "${GUNICORN_BIND:=0.0.0.0:8000}"
 : "${GUNICORN_WORKERS:=3}"
@@ -96,6 +99,11 @@ run_startup_tasks() {
     python manage.py migrate --noinput
   else
     log "Skipping migrations (RUN_MIGRATIONS=0)."
+  fi
+
+  if [[ "${CREATE_SUPERUSER}" == "1" ]]; then
+    log "Ensuring superuser exists (from DJANGO_SUPERUSER_* env)..."
+    python manage.py ensure_superuser
   fi
 
   if [[ "${RUN_COLLECTSTATIC}" == "1" ]]; then

@@ -3,14 +3,22 @@
 API routes are versioned under /api/v1/. Each app contributes its own
 `api/urls.py`, included here as milestones land.
 """
-
 from django.contrib import admin
+from django.shortcuts import redirect
 from django.urls import include, path
 from drf_spectacular.views import (
     SpectacularAPIView,
     SpectacularRedocView,
     SpectacularSwaggerView,
 )
+
+#=====================================================================
+# Redirect to Docs Settings
+#=====================================================================  
+def redirect_to_docs(request):
+    """Redirect root URL to API documentation"""
+    return redirect('swagger-ui')
+
 
 api_v1_patterns = [
     path("", include("Apps.common.api.urls")),
@@ -46,4 +54,7 @@ urlpatterns = [
         SpectacularRedocView.as_view(url_name="schema"),
         name="redoc",
     ),
+
+        # Root redirect
+    path('', redirect_to_docs, name='root-redirect'),
 ]
