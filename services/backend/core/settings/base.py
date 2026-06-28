@@ -43,6 +43,7 @@ DJANGO_APPS = [
 ]
 
 THIRD_PARTY_APPS = [
+    "corsheaders",
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
     "drf_spectacular",
@@ -121,6 +122,10 @@ NOTIFY_NEW_OFFER_DEDUPE_DAYS = env.int("NOTIFY_NEW_OFFER_DEDUPE_DAYS", default=7
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
+    # CORS must run before anything that can generate a response (CommonMiddleware,
+    # WhiteNoise in prod) so it can answer preflight OPTIONS requests itself and
+    # attach Access-Control-* headers to every response, including errors.
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -320,4 +325,37 @@ EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
 EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@nibblai.app")
+
+
+# ---------------------------------------------------------------------------
+# CORS (django-cors-headers)
+# ---------------------------------------------------------------------------
+# Browser frontends are served from a different origin than the API, so the API
+# must echo explicit Access-Control-* headers or every cross-origin request is
+# blocked by the same-origin policy. Origins are env-driven (comma-separated,
+# full scheme+host, e.g. "https://app.joinnibbl.com"); dev.py adds localhost.
+#
+# We never enable CORS_ALLOW_ALL_ORIGINS: the frontend sends Authorization
+# headers / cookies, and browsers reject credentialed requests against a "*"
+# origin. CorsMiddleware (placed first in MIDDLEWARE) answers preflight OPTIONS
+# requests with 200 before auth runs, so preflights no longer 401.
+CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[])
+
+# Send Access-Control-Allow-Credentials: true so the browser will expose
+# responses to credentialed (cookie / Authorization) requests.
+CORS_ALLOW_CREDENTIALS = env.bool("CORS_ALLOW_CREDENTIALS", default=True)
+
+# Cache preflight results for 24h to cut down on repeat OPTIONS round-trips.
+CORS_PREFLIGHT_MAX_AGE = env.int("CORS_PREFLIGHT_MAX_AGE", default=86400)
+
+# The package's defaults already cover the methods and headers the frontend
+# needs — methods: GET/POST/PUT/PATCH/DELETE/OPTIONS; headers: accept,
+# authorization, content-type, origin, x-csrftoken, x-requested-with, etc.
+# Extend CORS_ALLOW_HEADERS via the env list only if the frontend sends a
+# custom header beyond those defaults.
+_extra_cors_headers = env.list("CORS_EXTRA_ALLOW_HEADERS", default=[])
+if _extra_cors_headers:
+    from corsheaders.defaults import default_headers
+
+    CORS_ALLOW_HEADERS = (*default_headers, *_extra_cors_headers)
 
