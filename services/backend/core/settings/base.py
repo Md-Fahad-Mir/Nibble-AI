@@ -341,6 +341,16 @@ DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="no-reply@nibblai.app")
 # requests with 200 before auth runs, so preflights no longer 401.
 CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[])
 
+# Regex allowlist for origins that are dynamic and can't be enumerated — e.g.
+# Vercel preview deploys (https://<branch>-<hash>.vercel.app). Comma-separated
+# list of regexes, each one fully anchored so it can only match a real
+# *.vercel.app host and NOT a look-alike like "https://vercel.app.evil.com".
+#
+# SECURITY: combined with CORS_ALLOW_CREDENTIALS=True, any host matching these
+# patterns may make credentialed requests. Keep the patterns tight, and only
+# trust domains whose subdomains you control (don't broaden beyond previews).
+CORS_ALLOWED_ORIGIN_REGEXES = env.list("CORS_ALLOWED_ORIGIN_REGEXES", default=[])
+
 # Send Access-Control-Allow-Credentials: true so the browser will expose
 # responses to credentialed (cookie / Authorization) requests.
 CORS_ALLOW_CREDENTIALS = env.bool("CORS_ALLOW_CREDENTIALS", default=True)
