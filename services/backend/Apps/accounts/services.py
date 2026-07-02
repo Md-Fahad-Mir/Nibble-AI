@@ -98,6 +98,7 @@ def register_user(
     full_name: str,
     email: str,
     password: str,
+    role: str = User.Role.CONSUMER,
     referral_code: str | None = None,
 ) -> PendingUser:
     if User.objects.filter(email__iexact=email, is_deleted=False).exists():
@@ -112,6 +113,7 @@ def register_user(
         email=email.lower(),
         password=make_password(password),
         full_name=full_name,
+        role=role,
         referral_code=referral_code,
         verification_code=code,
         expires_at=expires_at,
@@ -172,6 +174,7 @@ def verify_email(*, email: str, code: str) -> User:
         email=pending.email,
         password=pending.password,
         full_name=pending.full_name,
+        role=pending.role,
         is_email_verified=True,
         referred_by=referred_by,
         accepted_terms_at=timezone.now(),

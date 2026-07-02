@@ -41,6 +41,7 @@ class RegisterView(APIView):
             full_name=data["full_name"],
             email=data["email"],
             password=data["password"],
+            role=data["role"],
             referral_code=data.get("referral_code") or None,
         )
         return Response(
@@ -49,7 +50,7 @@ class RegisterView(APIView):
                 "email": pending.email,
                 "phone": None,
                 "full_name": pending.full_name,
-                "role": "consumer",
+                "role": pending.role,
                 "is_email_verified": False,
                 "is_phone_verified": False,
                 "referral_code": "",
