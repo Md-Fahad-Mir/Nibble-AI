@@ -74,13 +74,17 @@ class LoginView(APIView):
         serializer = s.LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        tokens = _run(
+        result = _run(
             services.login,
             email=data["email"],
             password=data["password"],
             remember_me=data["remember_me"],
         )
-        return Response(tokens, status=status.HTTP_200_OK)
+        user_data = s.UserSerializer(result["user"], context={"request": request}).data
+        return Response(
+            {**result["tokens"], "user": user_data},
+            status=status.HTTP_200_OK,
+        )
 
 
 @extend_schema(tags=["auth"])

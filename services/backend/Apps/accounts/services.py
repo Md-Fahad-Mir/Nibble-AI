@@ -252,7 +252,8 @@ def login(*, email: str, password: str, remember_me: bool = False) -> dict:
         target_type="user",
         target_id=str(user.id),
     )
-    return issue_tokens(user, remember_me=remember_me)
+    tokens = issue_tokens(user, remember_me=remember_me)
+    return {"user": user, "tokens": tokens}
 
 
 
