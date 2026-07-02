@@ -43,6 +43,10 @@ class User(UUIDModel, AbstractBaseUser, PermissionsMixin):
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
 
+    # Brand accounts require admin approval before they can log in.
+    # Consumers and admins are auto-approved (default=True).
+    is_approved = models.BooleanField(default=True)
+
     is_email_verified = models.BooleanField(default=False)
     is_phone_verified = models.BooleanField(default=False)
 

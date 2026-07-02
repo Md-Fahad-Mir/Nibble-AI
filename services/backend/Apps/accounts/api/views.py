@@ -11,6 +11,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from Apps.accounts import serializers as s
 from Apps.accounts import services
+from Apps.accounts.models import User
 from Apps.accounts.services import AccountError
 
 
@@ -51,6 +52,7 @@ class RegisterView(APIView):
                 "phone": None,
                 "full_name": pending.full_name,
                 "role": pending.role,
+                "is_approved": pending.role != User.Role.BRAND,
                 "is_email_verified": False,
                 "is_phone_verified": False,
                 "referral_code": "",

@@ -170,12 +170,16 @@ def verify_email(*, email: str, code: str) -> User:
     if pending.referral_code:
         referred_by = get_user_by_referral_code(pending.referral_code)
 
+    # Brand accounts need admin approval before they can log in.
+    needs_approval = pending.role == User.Role.BRAND
+
     user = User(
         email=pending.email,
         password=pending.password,
         full_name=pending.full_name,
         role=pending.role,
         is_email_verified=True,
+        is_approved=not needs_approval,
         referred_by=referred_by,
         accepted_terms_at=timezone.now(),
     )
@@ -235,6 +239,11 @@ def login(*, email: str, password: str, remember_me: bool = False) -> dict:
         raise AccountError("Invalid email or password.")
     if not user.is_email_verified:
         raise AccountError("Email address is not verified.")
+    if not user.is_approved:
+        raise AccountError(
+            "Your account is pending admin approval. "
+            "You will be notified once it is approved."
+        )
 
     AuditLog.objects.create(
         action=AuditLog.Action.LOGIN,

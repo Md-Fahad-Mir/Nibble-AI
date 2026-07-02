@@ -7,15 +7,16 @@ from Apps.accounts.models import SocialAccount, User, VerificationCode
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
     ordering = ("-created_at",)
-    list_display = ("email", "full_name", "role", "is_email_verified", "is_active", "created_at")
-    list_filter = ("role", "is_active", "is_email_verified", "is_phone_verified", "is_staff")
+    list_display = ("email", "full_name", "role", "is_approved", "is_email_verified", "is_active", "created_at")
+    list_filter = ("role", "is_approved", "is_active", "is_email_verified", "is_phone_verified", "is_staff")
     search_fields = ("email", "full_name", "phone", "referral_code")
     readonly_fields = ("id", "referral_code", "last_login", "created_at", "updated_at")
+    actions = ["approve_brands"]
 
     fieldsets = (
         (None, {"fields": ("id", "email", "password")}),
         ("Profile", {"fields": ("full_name", "phone", "role")}),
-        ("Verification", {"fields": ("is_email_verified", "is_phone_verified", "accepted_terms_at")}),
+        ("Verification", {"fields": ("is_approved", "is_email_verified", "is_phone_verified", "accepted_terms_at")}),
         ("Referral", {"fields": ("referral_code", "referred_by")}),
         ("Permissions", {"fields": ("is_active", "is_staff", "is_superuser", "groups", "user_permissions")}),
         ("Deletion", {"fields": ("is_deleted", "deleted_at")}),
@@ -27,6 +28,11 @@ class UserAdmin(BaseUserAdmin):
             "fields": ("email", "full_name", "password1", "password2"),
         }),
     )
+
+    @admin.action(description="Approve selected brand accounts")
+    def approve_brands(self, request, queryset):
+        updated = queryset.filter(is_approved=False).update(is_approved=True)
+        self.message_user(request, f"{updated} brand account(s) approved.")
 
 
 @admin.register(VerificationCode)
